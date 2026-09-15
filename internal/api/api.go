@@ -85,6 +85,10 @@ func (s *Server) vcenterItem(w http.ResponseWriter, r *http.Request) {
 		s.testVCenter(w, r, id)
 		return
 	}
+	if len(parts) == 2 && parts[1] == "iso-status" && r.Method == http.MethodGet {
+		s.isoStatus(w, r, id)
+		return
+	}
 	if len(parts) != 1 {
 		http.NotFound(w, r)
 		return
@@ -161,6 +165,21 @@ func (s *Server) testVCenter(w http.ResponseWriter, r *http.Request, id string) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) isoStatus(w http.ResponseWriter, r *http.Request, id string) {
+	vc, ok := s.st.GetVCenterSecret(id)
+	if !ok {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	c, err := s.pool.For(vc)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	st := c.ISOCacheStatus(r.Context())
+	writeJSON(w, http.StatusOK, st)
 }
 
 func (s *Server) mappings(w http.ResponseWriter, r *http.Request) {

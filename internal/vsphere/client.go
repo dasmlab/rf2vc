@@ -2,14 +2,12 @@ package vsphere
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -318,13 +316,31 @@ func (c *Client) InsertMedia(ctx context.Context, uuid, imageURL string) error {
 		return fmt.Errorf("system %s not allowed", uuid)
 	}
 
+	dsPath := c.isoDSPath(imageURL)
+
+	// Fast path: ISO already staged on datastore — attach without download/upload.
+	if exists, size, err := c.datastoreFileExists(ctx, dsPath); err != nil {
+		return fmt.Errorf("stat datastore iso: %w", err)
+	} else if exists {
+		log.Printf("InsertMedia system=%s reuse datastore iso %s (%d bytes)", uuid, dsPath, size)
+		if err := c.attachCDROM(ctx, vm, dsPath); err != nil {
+			return fmt.Errorf("attach cdrom: %w", err)
+		}
+		if err := c.SetBootCDOnce(ctx, uuid); err != nil {
+			return fmt.Errorf("set boot cd: %w", err)
+		}
+		c.mu.Lock()
+		c.mediaISO[strings.ToLower(uuid)] = imageURL
+		c.mu.Unlock()
+		return nil
+	}
+
 	local, err := c.downloadISO(ctx, imageURL)
 	if err != nil {
 		return fmt.Errorf("download iso: %w", err)
 	}
 
-	dsPath := path.Join(c.ep.ISOFolder, filepath.Base(local))
-	if err := c.uploadISO(ctx, local, dsPath); err != nil {
+	if _, err := c.uploadISOIfNeeded(ctx, local, dsPath); err != nil {
 		return fmt.Errorf("upload iso: %w", err)
 	}
 
@@ -356,8 +372,7 @@ func (c *Client) EjectMedia(ctx context.Context, uuid string) error {
 }
 
 func (c *Client) downloadISO(ctx context.Context, imageURL string) (string, error) {
-	sum := sha256.Sum256([]byte(imageURL))
-	name := hex.EncodeToString(sum[:8]) + ".iso"
+	name := ISOFileName(imageURL)
 	dest := filepath.Join(c.ep.ISOCache, name)
 	if st, err := os.Stat(dest); err == nil && st.Size() > 0 {
 		return dest, nil
@@ -394,11 +409,6 @@ func (c *Client) downloadISO(ctx context.Context, imageURL string) (string, erro
 		return "", err
 	}
 	return dest, nil
-}
-
-func (c *Client) uploadISO(ctx context.Context, localPath, dsPath string) error {
-	p := soap.DefaultUpload
-	return c.ds.UploadFile(ctx, localPath, dsPath, &p)
 }
 
 func (c *Client) attachCDROM(ctx context.Context, vm *object.VirtualMachine, dsISOPath string) error {

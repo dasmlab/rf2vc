@@ -293,6 +293,44 @@ body {
   font-size: 1.15rem;
   color: var(--dasm-ink);
 }
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+.section-head h3 { margin: 0; }
+
+.iso-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin: 0.55rem 0 0.35rem;
+}
+.iso-row {
+  border: 1.5px solid var(--dasm-border-soft);
+  border-radius: 12px;
+  background: #fff;
+  padding: 0.65rem 0.8rem;
+}
+.iso-row .title {
+  font-weight: 700;
+  color: var(--dasm-ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9rem;
+}
+.iso-row .meta {
+  color: var(--dasm-text-muted);
+  font-size: 0.82rem;
+  word-break: break-all;
+  margin-top: 0.15rem;
+}
+.iso-row .flags {
+  color: var(--dasm-primary-dark);
+  font-size: 0.82rem;
+  margin-top: 0.2rem;
+}
 
 .uuid-list {
   display: flex;

@@ -146,12 +146,23 @@ function showVCView(vc) {
         <h2 class="detail-title">${escapeHtml(vc.name)}</h2>
         <p class="detail-meta">${escapeHtml(vc.url)}</p>
         <p class="detail-meta">${escapeHtml(vc.datacenter)} / ${escapeHtml(vc.datastore)} · ${escapeHtml(vc.username)}${vc.insecure ? " · insecure" : ""}</p>
+        <p class="detail-meta">ISO folder · ${escapeHtml(vc.isoFolder || "rf2vc/isos")}</p>
         ${vc.notes ? `<p class="detail-meta">${escapeHtml(vc.notes)}</p>` : ""}
       </div>
       <div class="detail-actions">
         <button type="button" class="pill ghost sm" data-edit="${vc.id}">Edit</button>
         <button type="button" class="pill danger sm" data-delete="${vc.id}">Delete</button>
       </div>
+    </div>
+
+    <div class="section-block">
+      <div class="section-head">
+        <h3>ISO cache</h3>
+        <button type="button" class="pill ghost sm" data-refresh-iso="${vc.id}">Refresh</button>
+      </div>
+      <p class="detail-meta" id="isoSummary">Loading…</p>
+      <div class="iso-list" id="isoList"></div>
+      <p class="msg" id="isoMsg"></p>
     </div>
 
     <div class="section-block">
@@ -166,6 +177,8 @@ function showVCView(vc) {
       <p class="msg" id="bindMsg"></p>
     </div>
   `;
+
+  loadISOStatus(vc.id);
 
   $("#bindForm").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -186,6 +199,56 @@ function showVCView(vc) {
       setMsg($("#bindMsg"), err.message, false);
     }
   });
+}
+
+function formatBytes(n) {
+  if (!n || n <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v < 10 && i > 0 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
+}
+
+async function loadISOStatus(vcId) {
+  const summary = $("#isoSummary");
+  const list = $("#isoList");
+  const msg = $("#isoMsg");
+  if (!summary || !list) return;
+  summary.textContent = "Loading…";
+  list.innerHTML = "";
+  setMsg(msg, "", null);
+  try {
+    const st = await api(`/api/v1/vcenters/${vcId}/iso-status`);
+    const reach = st.reachable ? "reachable" : "unreachable";
+    summary.textContent =
+      `${st.datastore || "?"} · ${st.isoFolder || "?"} · ${reach}` +
+      ` · ${st.datastoreCount || 0} on datastore · ${st.localCacheCount || 0} local`;
+    if (st.error) setMsg(msg, st.error, false);
+    const files = st.files || [];
+    if (!files.length) {
+      list.innerHTML = `<div class="vc-empty">No hashed ISOs staged yet. InsertMedia will download once, then reuse the datastore file.</div>`;
+      return;
+    }
+    list.innerHTML = files.map(f => {
+      const flags = [
+        f.onDatastore ? `DS ${formatBytes(f.datastoreSize)}` : "not on DS",
+        f.localCached ? `local ${formatBytes(f.localSize)}` : null,
+      ].filter(Boolean).join(" · ");
+      return `
+        <div class="iso-row">
+          <div class="title">${escapeHtml(f.name)}</div>
+          <div class="meta">${escapeHtml(f.datastorePath || "")}</div>
+          <div class="flags">${escapeHtml(flags)}</div>
+        </div>`;
+    }).join("");
+  } catch (err) {
+    summary.textContent = "ISO status unavailable";
+    setMsg(msg, err.message, false);
+  }
 }
 
 function wireVCForm(form) {
@@ -296,6 +359,7 @@ $("#detailPane").addEventListener("click", async (e) => {
   const edit = e.target.getAttribute("data-edit");
   const del = e.target.getAttribute("data-delete");
   const unmap = e.target.getAttribute("data-unmap");
+  const refreshIso = e.target.getAttribute("data-refresh-iso");
   if (edit) {
     const vc = vcenters.find(v => v.id === edit);
     if (vc) showEditForm(vc);
@@ -309,6 +373,9 @@ $("#detailPane").addEventListener("click", async (e) => {
   if (unmap) {
     await api(`/api/v1/mappings/${encodeURIComponent(unmap)}`, { method: "DELETE" });
     await reload(ui?.id);
+  }
+  if (refreshIso) {
+    await loadISOStatus(refreshIso);
   }
 });
 
