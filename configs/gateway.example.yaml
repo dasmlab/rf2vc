@@ -1,13 +1,5 @@
-# Minimal Redfish BMC facade in front of vCenter for ACM/MCE BareMetalHost
-# (redfish-virtualmedia). vCenter itself is NOT a Redfish BMC.
-#
-# BMH address shape (OpenShift Route / HAProxy edge TLS):
-#   redfish-virtualmedia://rf2vc.apps.2026-prod-1.ocp.dasmlab.org/redfish/v1/Systems/<VM-BIOS-UUID>
-#
-# Standalone / export (direct TLS on 8443):
-#   redfish-virtualmedia://GATEWAY_HOST:8443/redfish/v1/Systems/<VM-BIOS-UUID>
-#
-# credentialsName Secret user/pass must match gateway.auth below (or RF2VC_AUTH_* env).
+# Minimal gateway config. vCenters + UUID map live on PVC at dataDir/state.json
+# (managed via the admin UI). Optional GOVC_* env seeds the first vCenter.
 
 listen: ":8080"
 tlsCertFile: ""
@@ -17,15 +9,5 @@ auth:
   username: "redfish"
   password: "CHANGE_ME"
 
-vsphere:
-  url: "https://vcenter.example.local"
-  username: "CHANGE_ME@vsphere.local"
-  password: "CHANGE_ME"
-  insecure: true
-  datacenter: "Datacenter"
-  datastore: "CHANGE_ME_DATASTORE"
-  isoFolder: "rf2vc/isos"
-  # vmAllowlist:
-  #   - MO-OCLAB-CP01
-
-isoCacheDir: "/var/tmp/rf2vc"
+dataDir: "./data"
+isoCacheDir: "./data/iso-cache"

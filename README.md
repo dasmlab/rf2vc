@@ -1,75 +1,70 @@
 # rf2vc — Redfish → vSphere gateway
 
-Minimal **Redfish BMC facade** in front of **vCenter** so ACM/MCE BareMetalHost
-(`redfish-virtualmedia://...`) can power VMs and attach discovery ISOs.
+Minimal **Redfish BMC facade** in front of one or more **vCenters**, with a UUID→vCenter
+map so ACM/MCE BareMetalHost (`redfish-virtualmedia://.../Systems/<BIOS-UUID>`) routes
+to the right inventory.
 
 ```
-ACM / BMO  --Redfish-->  rf2vc  --govmomi-->  vCenter  -->  VMs
+Admin UI ──► /data/state.json (PVC) ──► in-memory map
+BMH/Ironic ──Redfish──► rf2vc ──govmomi──► vCenter A / B / …
 ```
-
-vCenter does **not** expose `/redfish/v1` for guest VMs. This service does.
 
 ## Prod (2026-prod-1)
 
 | Item | Value |
 |---|---|
-| Route | `https://rf2vc.apps.2026-prod-1.ocp.dasmlab.org` |
+| UI / API | `https://rf2vc.apps.2026-prod-1.ocp.dasmlab.org/` |
+| Redfish | `https://rf2vc.apps.2026-prod-1.ocp.dasmlab.org/redfish/v1/` |
 | Namespace | `rf2vc-system` |
+| PVC | `rf2vc-data` → `/data/state.json` |
 | Image | `ghcr.io/dasmlab/rf2vc:<version>` |
-| GitOps | `dasmlab-live-cicd` → `clusters/2026-prod-1/rf2vc/live` |
-| Secrets | `rf2vc-gateway` (auth + vSphere) via `scripts/bootstrap-secrets.sh` |
 
-BMH address after deploy:
+Open the UI (HTTP basic auth), add GOVC-shaped vCenters, bind BIOS UUIDs.
 
 ```yaml
 bmc:
   address: "redfish-virtualmedia://rf2vc.apps.2026-prod-1.ocp.dasmlab.org/redfish/v1/Systems/<BIOS-UUID>"
-  credentialsName: <secret matching RF2VC_AUTH_*>
-  disableCertificateVerification: true   # or trust the HAP/LE cert
+  credentialsName: <secret matching rf2vc auth>
+  disableCertificateVerification: true
 ```
 
-## Local / export build
+## Local
 
 ```bash
 cp configs/gateway.example.yaml configs/gateway.yaml
-# edit gateway.yaml — vCenter, datastore, auth
-
-go mod tidy
-make build
-./bin/rf2vc -config configs/gateway.yaml
+# set auth; mkdir -p data
+make build && make run
+# UI: http://127.0.0.1:8080/  (basic auth)
 ```
 
-Container:
+Optional first-boot seed:
 
 ```bash
-buildah bud -f deployments/containers/Containerfile -t rf2vc:dev .
-# or: docker build -f Dockerfile -t rf2vc:dev .
+export GOVC_URL=https://vcenter.example
+export GOVC_USERNAME=...
+export GOVC_PASSWORD=...
+export GOVC_DATACENTER=...
+export GOVC_DATASTORE=...
+export GOVC_INSECURE=1
 ```
 
-## Smoke test
+## API (basic auth)
 
-```bash
-curl -fsS https://rf2vc.apps.2026-prod-1.ocp.dasmlab.org/healthz
-curl -fsS -u 'redfish:PASSWORD' https://rf2vc.apps.2026-prod-1.ocp.dasmlab.org/redfish/v1/
-```
+- `GET /api/v1/status`
+- `GET|POST /api/v1/vcenters`
+- `GET|PUT|DELETE /api/v1/vcenters/{id}`
+- `POST /api/v1/vcenters/{id}/test`
+- `GET|POST /api/v1/mappings`
+- `PUT|DELETE /api/v1/mappings/{uuid}`
 
 ## Layout
 
 ```
-cmd/gateway/                 main
-internal/config/             YAML + RF2VC_* env overlays
-internal/redfish/            Redfish HTTP surface (+ /healthz)
-internal/vsphere/            govmomi power + ISO attach (lazy connect)
-configs/                     example config
-deployments/containers/      Containerfile (CI)
-k8s_envelope/                OCP deploy + Argo Application
-scripts/ci/                  GH Actions GitOps + HAP CERTX helpers
-.github/workflows/main.yml   build → GHCR → live-cicd
+cmd/gateway/           main + auth mux
+internal/store/        PVC JSON + in-memory UUID/vCenter indexes
+internal/vsphere/      per-VC client + pool
+internal/redfish/      Redfish surface (map-routed)
+internal/api/          management REST
+web/                   embedded admin UI (go:embed)
+k8s_envelope/          OCP + PVC + Argo
 ```
-
-## Lab caveats
-
-- Not a full Redfish implementation — only what BMO needs for this flow
-- ISO staging needs datastore capacity and network path to the Assisted image service
-- vSphere credentials stay in `rf2vc-gateway` Secret (never in GitOps YAML)
-- Prefer edge TLS at OpenShift Route / HAProxy; set `tlsCertFile`/`tlsKeyFile` only for standalone export

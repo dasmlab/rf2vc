@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dasmlab/rf2vc/internal/config"
 	"github.com/vmware/govmomi"
 	"github.com/vmware/govmomi/find"
 	"github.com/vmware/govmomi/object"
@@ -24,25 +23,43 @@ import (
 	"github.com/vmware/govmomi/vim25/types"
 )
 
+// Endpoint is per-vCenter connection settings (GOVC-shaped).
+type Endpoint struct {
+	ID         string
+	URL        string
+	Username   string
+	Password   string
+	Insecure   bool
+	Datacenter string
+	Datastore  string
+	ISOFolder  string
+	ISOCache   string
+	Allowlist  []string
+}
+
 type Client struct {
-	cfg    *config.Config
+	ep     Endpoint
 	client *govmomi.Client
 	finder *find.Finder
 	dc     *object.Datacenter
 	ds     *object.Datastore
 
 	mu       sync.Mutex
-	mediaISO map[string]string // systemUUID -> datastore ISO path
+	mediaISO map[string]string
 }
 
-// New creates a client that connects to vSphere lazily on first use so the
-// HTTP surface (healthz / ServiceRoot) can come up before vCenter is reachable.
-func New(_ context.Context, cfg *config.Config) (*Client, error) {
-	if err := os.MkdirAll(cfg.ISOCacheDir, 0o755); err != nil {
+func NewClient(ep Endpoint) (*Client, error) {
+	if ep.ISOCache == "" {
+		ep.ISOCache = "/var/tmp/rf2vc"
+	}
+	if ep.ISOFolder == "" {
+		ep.ISOFolder = "rf2vc/isos"
+	}
+	if err := os.MkdirAll(ep.ISOCache, 0o755); err != nil {
 		return nil, err
 	}
 	return &Client{
-		cfg:      cfg,
+		ep:       ep,
 		mediaISO: map[string]string{},
 	}, nil
 }
@@ -54,29 +71,29 @@ func (c *Client) ensure(ctx context.Context) error {
 		return nil
 	}
 
-	u, err := soap.ParseURL(c.cfg.VSphere.URL)
+	u, err := soap.ParseURL(c.ep.URL)
 	if err != nil {
 		return fmt.Errorf("parse vsphere url: %w", err)
 	}
-	u.User = url.UserPassword(c.cfg.VSphere.Username, c.cfg.VSphere.Password)
+	u.User = url.UserPassword(c.ep.Username, c.ep.Password)
 
-	client, err := govmomi.NewClient(ctx, u, c.cfg.VSphere.Insecure)
+	client, err := govmomi.NewClient(ctx, u, c.ep.Insecure)
 	if err != nil {
 		return fmt.Errorf("vsphere login: %w", err)
 	}
 
 	finder := find.NewFinder(client.Client, true)
-	dc, err := finder.Datacenter(ctx, c.cfg.VSphere.Datacenter)
+	dc, err := finder.Datacenter(ctx, c.ep.Datacenter)
 	if err != nil {
 		_ = client.Logout(ctx)
-		return fmt.Errorf("datacenter %q: %w", c.cfg.VSphere.Datacenter, err)
+		return fmt.Errorf("datacenter %q: %w", c.ep.Datacenter, err)
 	}
 	finder.SetDatacenter(dc)
 
-	ds, err := finder.Datastore(ctx, c.cfg.VSphere.Datastore)
+	ds, err := finder.Datastore(ctx, c.ep.Datastore)
 	if err != nil {
 		_ = client.Logout(ctx)
-		return fmt.Errorf("datastore %q: %w", c.cfg.VSphere.Datastore, err)
+		return fmt.Errorf("datastore %q: %w", c.ep.Datastore, err)
 	}
 
 	c.client = client
@@ -94,22 +111,37 @@ func (c *Client) Close(ctx context.Context) error {
 	}
 	err := c.client.Logout(ctx)
 	c.client = nil
+	c.finder = nil
+	c.dc = nil
+	c.ds = nil
 	return err
+}
+
+// TestConnection logs in and resolves datacenter/datastore, then logs out.
+func TestConnection(ctx context.Context, ep Endpoint) error {
+	c, err := NewClient(ep)
+	if err != nil {
+		return err
+	}
+	if err := c.ensure(ctx); err != nil {
+		return err
+	}
+	return c.Close(ctx)
 }
 
 type SystemInfo struct {
 	UUID       string
 	Name       string
-	PowerState string // On | Off | Paused | ...
+	PowerState string
 	MemoryMiB  int32
 	CPUs       int32
 }
 
 func (c *Client) allow(name string) bool {
-	if len(c.cfg.VSphere.VMAllowlist) == 0 {
+	if len(c.ep.Allowlist) == 0 {
 		return true
 	}
-	for _, a := range c.cfg.VSphere.VMAllowlist {
+	for _, a := range c.ep.Allowlist {
 		if strings.EqualFold(a, name) {
 			return true
 		}
@@ -117,36 +149,7 @@ func (c *Client) allow(name string) bool {
 	return false
 }
 
-func (c *Client) ListSystems(ctx context.Context) ([]SystemInfo, error) {
-	if err := c.ensure(ctx); err != nil {
-		return nil, err
-	}
-	vms, err := c.finder.VirtualMachineList(ctx, "*")
-	if err != nil {
-		// empty inventory is ok
-		if _, ok := err.(*find.NotFoundError); ok {
-			return nil, nil
-		}
-		return nil, err
-	}
-	out := make([]SystemInfo, 0, len(vms))
-	for _, vm := range vms {
-		info, err := c.infoFromVM(ctx, vm)
-		if err != nil {
-			continue
-		}
-		if !c.allow(info.Name) {
-			continue
-		}
-		out = append(out, info)
-	}
-	return out, nil
-}
-
 func (c *Client) GetSystem(ctx context.Context, uuid string) (*SystemInfo, error) {
-	if err := c.ensure(ctx); err != nil {
-		return nil, err
-	}
 	vm, err := c.findByUUID(ctx, uuid)
 	if err != nil {
 		return nil, err
@@ -204,7 +207,6 @@ func (c *Client) findByUUID(ctx context.Context, uuid string) (*object.VirtualMa
 	}
 	uuid = strings.ToLower(strings.TrimSpace(uuid))
 	search := object.NewSearchIndex(c.client.Client)
-	// false => BIOS UUID (matches BMH Systems/<uuid>); true => instance UUID
 	instanceUUID := false
 	ref, err := search.FindByUuid(ctx, c.dc, uuid, true, &instanceUUID)
 	if err != nil {
@@ -220,7 +222,6 @@ func (c *Client) findByUUID(ctx context.Context, uuid string) (*object.VirtualMa
 	return vm, nil
 }
 
-// Reset implements ComputerSystem.Reset ResetType values Ironic commonly sends.
 func (c *Client) Reset(ctx context.Context, uuid, resetType string) error {
 	vm, err := c.findByUUID(ctx, uuid)
 	if err != nil {
@@ -304,7 +305,6 @@ func (c *Client) MediaStatus(uuid string) MediaStatus {
 	return MediaStatus{Inserted: ok && img != "", Image: img}
 }
 
-// InsertMedia downloads imageURL, uploads to datastore, attaches as CD-ROM, boots CD once.
 func (c *Client) InsertMedia(ctx context.Context, uuid, imageURL string) error {
 	vm, err := c.findByUUID(ctx, uuid)
 	if err != nil {
@@ -323,7 +323,7 @@ func (c *Client) InsertMedia(ctx context.Context, uuid, imageURL string) error {
 		return fmt.Errorf("download iso: %w", err)
 	}
 
-	dsPath := path.Join(c.cfg.VSphere.ISOFolder, filepath.Base(local))
+	dsPath := path.Join(c.ep.ISOFolder, filepath.Base(local))
 	if err := c.uploadISO(ctx, local, dsPath); err != nil {
 		return fmt.Errorf("upload iso: %w", err)
 	}
@@ -358,7 +358,7 @@ func (c *Client) EjectMedia(ctx context.Context, uuid string) error {
 func (c *Client) downloadISO(ctx context.Context, imageURL string) (string, error) {
 	sum := sha256.Sum256([]byte(imageURL))
 	name := hex.EncodeToString(sum[:8]) + ".iso"
-	dest := filepath.Join(c.cfg.ISOCacheDir, name)
+	dest := filepath.Join(c.ep.ISOCache, name)
 	if st, err := os.Stat(dest); err == nil && st.Size() > 0 {
 		return dest, nil
 	}

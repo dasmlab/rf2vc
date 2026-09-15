@@ -103,26 +103,23 @@ jobs:
           cid="rf2vc-smoke-${GITHUB_SHA::8}"
           docker rm -f "${cid}" 2>/dev/null || true
           cfg="$(mktemp)"
+          datadir="$(mktemp -d)"
           cat > "${cfg}" <<'EOF'
           listen: ":8080"
           auth:
             username: "redfish"
             password: "smoke"
-          vsphere:
-            url: "https://vcenter.example.local"
-            username: "smoke@vsphere.local"
-            password: "smoke"
-            insecure: true
-            datacenter: "Datacenter"
-            datastore: "datastore1"
-          isoCacheDir: "/var/tmp/rf2vc"
+          dataDir: "/data"
+          isoCacheDir: "/data/iso-cache"
           EOF
           docker run -d --name "${cid}" \
             -v "${cfg}:/etc/rf2vc/gateway.yaml:ro" \
+            -v "${datadir}:/data" \
             "ghcr.io/dasmlab/rf2vc:${VERSION_TAG}"
-          trap 'docker rm -f "${cid}" 2>/dev/null || true; rm -f "${cfg}"' EXIT
+          trap 'docker rm -f "${cid}" 2>/dev/null || true; rm -f "${cfg}"; rm -rf "${datadir}"' EXIT
           for _ in $(seq 1 30); do
             if docker exec "${cid}" curl -fsS http://localhost:8080/healthz >/dev/null 2>&1; then
+              docker exec "${cid}" curl -fsS -u redfish:smoke http://localhost:8080/api/v1/status
               docker exec "${cid}" curl -fsS -u redfish:smoke http://localhost:8080/redfish/v1/
               exit 0
             fi

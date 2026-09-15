@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>rf2vc</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <div class="noise" aria-hidden="true"></div>
+  <header class="hero">
+    <p class="brand">rf2vc</p>
+    <h1>Redfish → vSphere gateway</h1>
+    <p class="lede">Map BIOS UUIDs to vCenters. BMH hits <code>/redfish/v1/Systems/&lt;uuid&gt;</code>; we route it.</p>
+    <p class="status" id="statusLine">loading…</p>
+  </header>
+
+  <main class="grid">
+    <section class="panel" id="vcPanel">
+      <div class="panel-head">
+        <h2>vCenters</h2>
+        <button type="button" class="btn ghost" id="btnNewVC">Add</button>
+      </div>
+      <div id="vcList" class="list"></div>
+      <form id="vcForm" class="form hidden">
+        <input type="hidden" name="id" />
+        <label>Name <input name="name" required placeholder="lab-vc" /></label>
+        <label>URL <input name="url" required placeholder="https://vcenter.example.local" /></label>
+        <label>Username <input name="username" required placeholder="administrator@vsphere.local" /></label>
+        <label>Password <input name="password" type="password" placeholder="leave blank to keep" autocomplete="new-password" /></label>
+        <div class="row">
+          <label>Datacenter <input name="datacenter" required /></label>
+          <label>Datastore <input name="datastore" required /></label>
+        </div>
+        <label>ISO folder <input name="isoFolder" placeholder="rf2vc/isos" /></label>
+        <label class="check"><input type="checkbox" name="insecure" /> Insecure TLS (GOVC_INSECURE)</label>
+        <label>Notes <input name="notes" /></label>
+        <div class="actions">
+          <button type="submit" class="btn">Save</button>
+          <button type="button" class="btn ghost" id="btnTestVC">Test</button>
+          <button type="button" class="btn ghost" id="btnCancelVC">Cancel</button>
+        </div>
+        <p class="msg" id="vcMsg"></p>
+      </form>
+    </section>
+
+    <section class="panel" id="mapPanel">
+      <div class="panel-head">
+        <h2>UUID map</h2>
+        <input type="search" id="mapFilter" placeholder="filter uuid / name…" />
+      </div>
+      <form id="mapForm" class="form inline">
+        <label>BIOS UUID <input name="uuid" required placeholder="4235a1b2-…" /></label>
+        <label>vCenter
+          <select name="vcenterId" id="mapVCSelect" required></select>
+        </label>
+        <label>Name <input name="name" placeholder="MO-OCLAB-CP01" /></label>
+        <label>Notes <input name="notes" /></label>
+        <button type="submit" class="btn">Bind</button>
+      </form>
+      <p class="msg" id="mapMsg"></p>
+      <div id="mapList" class="list"></div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

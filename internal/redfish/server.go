@@ -7,71 +7,35 @@ import (
 	"strings"
 
 	"github.com/dasmlab/rf2vc/internal/config"
+	"github.com/dasmlab/rf2vc/internal/store"
 	"github.com/dasmlab/rf2vc/internal/vsphere"
 )
 
-// Minimal Redfish surface used by Ironic/BMO redfish + redfish-virtualmedia:
-//
-//	GET  /redfish/v1/
-//	GET  /redfish/v1/Systems
-//	GET  /redfish/v1/Systems/{id}
-//	POST /redfish/v1/Systems/{id}/Actions/ComputerSystem.Reset
-//	PATCH /redfish/v1/Systems/{id}   (Boot override)
-//	GET  /redfish/v1/Managers
-//	GET  /redfish/v1/Managers/{id}
-//	GET  /redfish/v1/Managers/{id}/VirtualMedia
-//	GET  /redfish/v1/Managers/{id}/VirtualMedia/Cd
-//	POST .../VirtualMedia.InsertMedia
-//	POST .../VirtualMedia.EjectMedia
+// Minimal Redfish surface used by Ironic/BMO redfish + redfish-virtualmedia.
 type Server struct {
-	cfg *config.Config
-	vs  *vsphere.Client
+	cfg  *config.Config
+	st   *store.Store
+	pool *vsphere.Pool
 }
 
-func NewServer(cfg *config.Config, vs *vsphere.Client) *Server {
-	return &Server{cfg: cfg, vs: vs}
+func NewServer(cfg *config.Config, st *store.Store, pool *vsphere.Pool) *Server {
+	return &Server{cfg: cfg, st: st, pool: pool}
 }
 
-func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	})
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		_, _ = w.Write([]byte("rf2vc — Redfish → vSphere gateway\n\n" +
-			"GET  /healthz\n" +
-			"GET  /redfish/v1/          (basic auth)\n" +
-			"GET  /redfish/v1/Systems   (basic auth)\n"))
-	})
+func (s *Server) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("/redfish/v1/", s.route)
 	mux.HandleFunc("/redfish/v1", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/redfish/v1/", http.StatusPermanentRedirect)
 	})
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" || r.URL.Path == "/" {
-			mux.ServeHTTP(w, r)
-			return
-		}
-		s.basicAuth(mux).ServeHTTP(w, r)
-	})
 }
 
-func (s *Server) basicAuth(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		u, p, ok := r.BasicAuth()
-		if !ok || u != s.cfg.Auth.Username || p != s.cfg.Auth.Password {
-			w.Header().Set("WWW-Authenticate", `Basic realm="Redfish"`)
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+func (s *Server) clientFor(w http.ResponseWriter, uuid string) (*vsphere.Client, bool) {
+	c, _, err := s.pool.ClientForUUID(s.st, uuid)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return nil, false
+	}
+	return c, true
 }
 
 func (s *Server) route(w http.ResponseWriter, r *http.Request) {
@@ -86,7 +50,7 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	case p == "/" && r.Method == http.MethodGet:
 		s.serviceRoot(w)
 	case p == "/Systems" && r.Method == http.MethodGet:
-		s.systemsCollection(w, r)
+		s.systemsCollection(w)
 	case strings.HasPrefix(p, "/Systems/") && strings.HasSuffix(p, "/Actions/ComputerSystem.Reset") && r.Method == http.MethodPost:
 		id := systemIDFrom(p, "/Actions/ComputerSystem.Reset")
 		s.systemReset(w, r, id)
@@ -107,8 +71,6 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	case p == "/Managers/1/VirtualMedia" && r.Method == http.MethodGet:
 		s.virtualMediaCollection(w)
 	case p == "/Managers/1/VirtualMedia/Cd" && r.Method == http.MethodGet:
-		// Cd is shared listing; Ironic binds media to a system via Insert on manager
-		// We require ?system=<uuid> optional; without it return empty inserted.
 		s.virtualMediaCd(w, r, "")
 	case strings.HasPrefix(p, "/Systems/") && strings.HasSuffix(p, "/VirtualMedia") && r.Method == http.MethodGet:
 		id := systemIDFrom(p, "/VirtualMedia")
@@ -123,7 +85,6 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		id := systemIDFrom(p, "/VirtualMedia/Cd")
 		s.virtualMediaCd(w, r, id)
 	case strings.HasPrefix(p, "/Managers/1/VirtualMedia/Cd/Actions/VirtualMedia.InsertMedia") && r.Method == http.MethodPost:
-		// Manager-scoped insert requires system query param
 		sys := r.URL.Query().Get("system")
 		s.insertMedia(w, r, sys)
 	case strings.HasPrefix(p, "/Managers/1/VirtualMedia/Cd/Actions/VirtualMedia.EjectMedia") && r.Method == http.MethodPost:
@@ -160,16 +121,12 @@ func (s *Server) serviceRoot(w http.ResponseWriter) {
 	})
 }
 
-func (s *Server) systemsCollection(w http.ResponseWriter, r *http.Request) {
-	systems, err := s.vs.ListSystems(r.Context())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	members := make([]map[string]string, 0, len(systems))
-	for _, sys := range systems {
+func (s *Server) systemsCollection(w http.ResponseWriter) {
+	mappings := s.st.ListMappings()
+	members := make([]map[string]string, 0, len(mappings))
+	for _, m := range mappings {
 		members = append(members, map[string]string{
-			"@odata.id": "/redfish/v1/Systems/" + sys.UUID,
+			"@odata.id": "/redfish/v1/Systems/" + m.UUID,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -182,7 +139,11 @@ func (s *Server) systemsCollection(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) systemGet(w http.ResponseWriter, r *http.Request, id string) {
-	sys, err := s.vs.GetSystem(r.Context(), id)
+	c, ok := s.clientFor(w, id)
+	if !ok {
+		return
+	}
+	sys, err := c.GetSystem(r.Context(), id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -226,6 +187,10 @@ func (s *Server) systemGet(w http.ResponseWriter, r *http.Request, id string) {
 }
 
 func (s *Server) systemReset(w http.ResponseWriter, r *http.Request, id string) {
+	c, ok := s.clientFor(w, id)
+	if !ok {
+		return
+	}
 	var body struct {
 		ResetType string `json:"ResetType"`
 	}
@@ -233,7 +198,7 @@ func (s *Server) systemReset(w http.ResponseWriter, r *http.Request, id string) 
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.vs.Reset(r.Context(), id, body.ResetType); err != nil {
+	if err := c.Reset(r.Context(), id, body.ResetType); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -241,6 +206,10 @@ func (s *Server) systemReset(w http.ResponseWriter, r *http.Request, id string) 
 }
 
 func (s *Server) systemPatch(w http.ResponseWriter, r *http.Request, id string) {
+	c, ok := s.clientFor(w, id)
+	if !ok {
+		return
+	}
 	var body struct {
 		Boot *struct {
 			BootSourceOverrideTarget  string `json:"BootSourceOverrideTarget"`
@@ -254,7 +223,7 @@ func (s *Server) systemPatch(w http.ResponseWriter, r *http.Request, id string) 
 	if body.Boot != nil {
 		target := strings.ToLower(body.Boot.BootSourceOverrideTarget)
 		if target == "cd" || target == "cdrom" || target == "usb" {
-			if err := s.vs.SetBootCDOnce(r.Context(), id); err != nil {
+			if err := c.SetBootCDOnce(r.Context(), id); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
@@ -299,6 +268,10 @@ func (s *Server) virtualMediaCollection(w http.ResponseWriter) {
 }
 
 func (s *Server) systemVirtualMediaCollection(w http.ResponseWriter, id string) {
+	if _, _, ok := s.st.LookupUUID(id); !ok {
+		http.Error(w, "uuid not mapped", http.StatusNotFound)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"@odata.id":           "/redfish/v1/Systems/" + id + "/VirtualMedia",
 		"@odata.type":         "#VirtualMediaCollection.VirtualMediaCollection",
@@ -319,21 +292,25 @@ func (s *Server) virtualMediaCd(w http.ResponseWriter, r *http.Request, systemID
 	insertTarget := "/redfish/v1/Managers/1/VirtualMedia/Cd/Actions/VirtualMedia.InsertMedia"
 	ejectTarget := "/redfish/v1/Managers/1/VirtualMedia/Cd/Actions/VirtualMedia.EjectMedia"
 	if systemID != "" {
-		st = s.vs.MediaStatus(systemID)
+		c, ok := s.clientFor(w, systemID)
+		if !ok {
+			return
+		}
+		st = c.MediaStatus(systemID)
 		odataID = "/redfish/v1/Systems/" + systemID + "/VirtualMedia/Cd"
 		insertTarget = odataID + "/Actions/VirtualMedia.InsertMedia"
 		ejectTarget = odataID + "/Actions/VirtualMedia.EjectMedia"
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"@odata.id":         odataID,
-		"@odata.type":       "#VirtualMedia.v1_3_0.VirtualMedia",
-		"Id":                "Cd",
-		"Name":              "Virtual CD",
-		"MediaTypes":        []string{"CD", "DVD"},
-		"Inserted":          st.Inserted,
-		"Image":             st.Image,
-		"WriteProtected":    true,
-		"ConnectedVia":      "URI",
+		"@odata.id":            odataID,
+		"@odata.type":          "#VirtualMedia.v1_3_0.VirtualMedia",
+		"Id":                   "Cd",
+		"Name":                 "Virtual CD",
+		"MediaTypes":           []string{"CD", "DVD"},
+		"Inserted":             st.Inserted,
+		"Image":                st.Image,
+		"WriteProtected":       true,
+		"ConnectedVia":         "URI",
 		"TransferProtocolType": "HTTP",
 		"Actions": map[string]any{
 			"#VirtualMedia.InsertMedia": map[string]any{"target": insertTarget},
@@ -345,6 +322,10 @@ func (s *Server) virtualMediaCd(w http.ResponseWriter, r *http.Request, systemID
 func (s *Server) insertMedia(w http.ResponseWriter, r *http.Request, systemID string) {
 	if systemID == "" {
 		http.Error(w, "system id required", http.StatusBadRequest)
+		return
+	}
+	c, ok := s.clientFor(w, systemID)
+	if !ok {
 		return
 	}
 	var body struct {
@@ -361,7 +342,7 @@ func (s *Server) insertMedia(w http.ResponseWriter, r *http.Request, systemID st
 		return
 	}
 	log.Printf("InsertMedia system=%s image=%s", systemID, body.Image)
-	if err := s.vs.InsertMedia(r.Context(), systemID, body.Image); err != nil {
+	if err := c.InsertMedia(r.Context(), systemID, body.Image); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -373,8 +354,12 @@ func (s *Server) ejectMedia(w http.ResponseWriter, r *http.Request, systemID str
 		http.Error(w, "system id required", http.StatusBadRequest)
 		return
 	}
+	c, ok := s.clientFor(w, systemID)
+	if !ok {
+		return
+	}
 	log.Printf("EjectMedia system=%s", systemID)
-	if err := s.vs.EjectMedia(r.Context(), systemID); err != nil {
+	if err := c.EjectMedia(r.Context(), systemID); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

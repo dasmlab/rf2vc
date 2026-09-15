@@ -8,28 +8,17 @@ import (
 )
 
 type Config struct {
-	Listen      string        `yaml:"listen"`
-	TLSCertFile string        `yaml:"tlsCertFile"`
-	TLSKeyFile  string        `yaml:"tlsKeyFile"`
-	Auth        AuthConfig    `yaml:"auth"`
-	VSphere     VSphereConfig `yaml:"vsphere"`
-	ISOCacheDir string        `yaml:"isoCacheDir"`
+	Listen      string     `yaml:"listen"`
+	TLSCertFile string     `yaml:"tlsCertFile"`
+	TLSKeyFile  string     `yaml:"tlsKeyFile"`
+	Auth        AuthConfig `yaml:"auth"`
+	DataDir     string     `yaml:"dataDir"`
+	ISOCacheDir string     `yaml:"isoCacheDir"`
 }
 
 type AuthConfig struct {
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
-}
-
-type VSphereConfig struct {
-	URL         string   `yaml:"url"`
-	Username    string   `yaml:"username"`
-	Password    string   `yaml:"password"`
-	Insecure    bool     `yaml:"insecure"`
-	Datacenter  string   `yaml:"datacenter"`
-	Datastore   string   `yaml:"datastore"`
-	ISOFolder   string   `yaml:"isoFolder"`
-	VMAllowlist []string `yaml:"vmAllowlist"`
 }
 
 func Load(path string) (*Config, error) {
@@ -45,20 +34,14 @@ func Load(path string) (*Config, error) {
 	if c.Listen == "" {
 		c.Listen = ":8080"
 	}
-	if c.ISOCacheDir == "" {
-		c.ISOCacheDir = "/var/tmp/rf2vc"
+	if c.DataDir == "" {
+		c.DataDir = "/data"
 	}
-	if c.VSphere.ISOFolder == "" {
-		c.VSphere.ISOFolder = "rf2vc/isos"
+	if c.ISOCacheDir == "" {
+		c.ISOCacheDir = c.DataDir + "/iso-cache"
 	}
 	if c.Auth.Username == "" || c.Auth.Password == "" {
 		return nil, fmt.Errorf("auth.username and auth.password are required")
-	}
-	if c.VSphere.URL == "" || c.VSphere.Username == "" || c.VSphere.Password == "" {
-		return nil, fmt.Errorf("vsphere.url/username/password are required")
-	}
-	if c.VSphere.Datacenter == "" || c.VSphere.Datastore == "" {
-		return nil, fmt.Errorf("vsphere.datacenter and vsphere.datastore are required")
 	}
 	return &c, nil
 }
@@ -73,20 +56,8 @@ func applyEnvOverrides(c *Config) {
 	if v := os.Getenv("RF2VC_AUTH_PASSWORD"); v != "" {
 		c.Auth.Password = v
 	}
-	if v := os.Getenv("RF2VC_VSPHERE_URL"); v != "" {
-		c.VSphere.URL = v
-	}
-	if v := os.Getenv("RF2VC_VSPHERE_USERNAME"); v != "" {
-		c.VSphere.Username = v
-	}
-	if v := os.Getenv("RF2VC_VSPHERE_PASSWORD"); v != "" {
-		c.VSphere.Password = v
-	}
-	if v := os.Getenv("RF2VC_VSPHERE_DATACENTER"); v != "" {
-		c.VSphere.Datacenter = v
-	}
-	if v := os.Getenv("RF2VC_VSPHERE_DATASTORE"); v != "" {
-		c.VSphere.Datastore = v
+	if v := os.Getenv("RF2VC_DATA_DIR"); v != "" {
+		c.DataDir = v
 	}
 	if v := os.Getenv("RF2VC_ISO_CACHE_DIR"); v != "" {
 		c.ISOCacheDir = v

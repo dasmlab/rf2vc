@@ -48,6 +48,22 @@ subjects:
 
 ---
 apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rf2vc-data
+  namespace: rf2vc-system
+  labels:
+    app: rf2vc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: lvms-vg1
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+apiVersion: v1
 kind: ConfigMap
 metadata:
   name: rf2vc-gateway-config
@@ -62,15 +78,8 @@ data:
     auth:
       username: "redfish"
       password: "OVERRIDDEN_BY_SECRET"
-    vsphere:
-      url: "https://vcenter.example.local"
-      username: "OVERRIDDEN_BY_SECRET"
-      password: "OVERRIDDEN_BY_SECRET"
-      insecure: true
-      datacenter: "Datacenter"
-      datastore: "datastore1"
-      isoFolder: "rf2vc/isos"
-    isoCacheDir: "/var/tmp/rf2vc"
+    dataDir: "/data"
+    isoCacheDir: "/data/iso-cache"
 
 ---
 apiVersion: apps/v1
@@ -111,6 +120,8 @@ spec:
           env:
             - name: RF2VC_LISTEN
               value: ":8080"
+            - name: RF2VC_DATA_DIR
+              value: "/data"
             - name: BUILD_VERSION
               value: "__VERSION__"
             - name: RF2VC_AUTH_USERNAME
@@ -123,37 +134,12 @@ spec:
                 secretKeyRef:
                   name: rf2vc-gateway
                   key: auth-password
-            - name: RF2VC_VSPHERE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: rf2vc-gateway
-                  key: vsphere-url
-            - name: RF2VC_VSPHERE_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: rf2vc-gateway
-                  key: vsphere-username
-            - name: RF2VC_VSPHERE_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: rf2vc-gateway
-                  key: vsphere-password
-            - name: RF2VC_VSPHERE_DATACENTER
-              valueFrom:
-                secretKeyRef:
-                  name: rf2vc-gateway
-                  key: vsphere-datacenter
-            - name: RF2VC_VSPHERE_DATASTORE
-              valueFrom:
-                secretKeyRef:
-                  name: rf2vc-gateway
-                  key: vsphere-datastore
           volumeMounts:
             - name: config
               mountPath: /etc/rf2vc
               readOnly: true
-            - name: iso-cache
-              mountPath: /var/tmp/rf2vc
+            - name: data
+              mountPath: /data
           ports:
             - name: http
               containerPort: 8080
@@ -181,9 +167,9 @@ spec:
         - name: config
           configMap:
             name: rf2vc-gateway-config
-        - name: iso-cache
-          emptyDir:
-            sizeLimit: 8Gi
+        - name: data
+          persistentVolumeClaim:
+            claimName: rf2vc-data
 
 ---
 apiVersion: v1

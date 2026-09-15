@@ -4,6 +4,7 @@ set -euo pipefail
 
 VERSION_TAG="${VERSION_TAG:?}"
 ACTOR="${PREVIEW_ACTOR:?}"
+STORAGE_CLASS="${STORAGE_CLASS:-lvms-vg1}"
 CLUSTER_APPS="${CLUSTER_APPS_DOMAIN:-apps.2026-prod-1.ocp.dasmlab.org}"
 
 OWNER="$(echo "${ACTOR}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//; s/-+/-/g' | cut -c1-20)"
@@ -16,6 +17,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RENDERED="$(mktemp)"
 sed \
   -e "s|__VERSION__|${VERSION_TAG}|g" \
+  -e "s|__STORAGE_CLASS__|${STORAGE_CLASS}|g" \
   -e "s|__PREVIEW_NS__|${NS}|g" \
   -e "s|__PREVIEW_HOST__|${HOST}|g" \
   -e "s|__PREVIEW_OWNER__|${OWNER}|g" \

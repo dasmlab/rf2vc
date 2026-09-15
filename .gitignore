@@ -1,5 +1,6 @@
 bin/
 configs/gateway.yaml
+data/
 *.exe
 .idea/
 .vscode/
