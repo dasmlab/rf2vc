@@ -1,0 +1,39 @@
+# Stage 1: Build Go binary
+FROM golang:1.22-bookworm AS go-builder
+WORKDIR /app
+ARG ARCH=amd64
+ARG BUILD_VERSION=dev
+ENV GOPROXY=https://proxy.golang.org
+
+COPY go.mod go.sum* ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
+
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux GOARCH=${ARCH} \
+    go build -ldflags "-s -w -X main.buildVersion=${BUILD_VERSION}" \
+    -o /rf2vc ./cmd/gateway
+
+# Stage 2: Runtime
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -u 65532 -r -s /usr/sbin/nologin appuser \
+    && mkdir -p /var/tmp/rf2vc \
+    && chown -R 65532:65532 /var/tmp/rf2vc
+
+USER 65532
+
+WORKDIR /app
+COPY --from=go-builder /rf2vc /app/rf2vc
+
+ENV RF2VC_LISTEN=:8080
+EXPOSE 8080
+
+ENTRYPOINT ["/app/rf2vc"]
+CMD ["-config", "/etc/rf2vc/gateway.yaml"]

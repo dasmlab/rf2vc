@@ -1,0 +1,371 @@
+package redfish
+
+import (
+	"encoding/json"
+	"log"
+	"net/http"
+	"strings"
+
+	"github.com/dasmlab/rf2vc/internal/config"
+	"github.com/dasmlab/rf2vc/internal/vsphere"
+)
+
+// Minimal Redfish surface used by Ironic/BMO redfish + redfish-virtualmedia:
+//
+//	GET  /redfish/v1/
+//	GET  /redfish/v1/Systems
+//	GET  /redfish/v1/Systems/{id}
+//	POST /redfish/v1/Systems/{id}/Actions/ComputerSystem.Reset
+//	PATCH /redfish/v1/Systems/{id}   (Boot override)
+//	GET  /redfish/v1/Managers
+//	GET  /redfish/v1/Managers/{id}
+//	GET  /redfish/v1/Managers/{id}/VirtualMedia
+//	GET  /redfish/v1/Managers/{id}/VirtualMedia/Cd
+//	POST .../VirtualMedia.InsertMedia
+//	POST .../VirtualMedia.EjectMedia
+type Server struct {
+	cfg *config.Config
+	vs  *vsphere.Client
+}
+
+func NewServer(cfg *config.Config, vs *vsphere.Client) *Server {
+	return &Server{cfg: cfg, vs: vs}
+}
+
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+	mux.HandleFunc("/redfish/v1/", s.route)
+	mux.HandleFunc("/redfish/v1", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/redfish/v1/", http.StatusPermanentRedirect)
+	})
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" {
+			mux.ServeHTTP(w, r)
+			return
+		}
+		s.basicAuth(mux).ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) basicAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u, p, ok := r.BasicAuth()
+		if !ok || u != s.cfg.Auth.Username || p != s.cfg.Auth.Password {
+			w.Header().Set("WWW-Authenticate", `Basic realm="Redfish"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) route(w http.ResponseWriter, r *http.Request) {
+	p := strings.TrimPrefix(r.URL.Path, "/redfish/v1")
+	p = strings.TrimSuffix(p, "/")
+	if p == "" {
+		p = "/"
+	}
+	log.Printf("%s %s", r.Method, r.URL.Path)
+
+	switch {
+	case p == "/" && r.Method == http.MethodGet:
+		s.serviceRoot(w)
+	case p == "/Systems" && r.Method == http.MethodGet:
+		s.systemsCollection(w, r)
+	case strings.HasPrefix(p, "/Systems/") && strings.HasSuffix(p, "/Actions/ComputerSystem.Reset") && r.Method == http.MethodPost:
+		id := systemIDFrom(p, "/Actions/ComputerSystem.Reset")
+		s.systemReset(w, r, id)
+	case strings.HasPrefix(p, "/Systems/") && r.Method == http.MethodGet:
+		id := strings.TrimPrefix(p, "/Systems/")
+		if strings.Contains(id, "/") {
+			http.NotFound(w, r)
+			return
+		}
+		s.systemGet(w, r, id)
+	case strings.HasPrefix(p, "/Systems/") && r.Method == http.MethodPatch:
+		id := strings.TrimPrefix(p, "/Systems/")
+		s.systemPatch(w, r, id)
+	case p == "/Managers" && r.Method == http.MethodGet:
+		s.managersCollection(w)
+	case p == "/Managers/1" && r.Method == http.MethodGet:
+		s.managerGet(w)
+	case p == "/Managers/1/VirtualMedia" && r.Method == http.MethodGet:
+		s.virtualMediaCollection(w)
+	case p == "/Managers/1/VirtualMedia/Cd" && r.Method == http.MethodGet:
+		// Cd is shared listing; Ironic binds media to a system via Insert on manager
+		// We require ?system=<uuid> optional; without it return empty inserted.
+		s.virtualMediaCd(w, r, "")
+	case strings.HasPrefix(p, "/Systems/") && strings.HasSuffix(p, "/VirtualMedia") && r.Method == http.MethodGet:
+		id := systemIDFrom(p, "/VirtualMedia")
+		s.systemVirtualMediaCollection(w, id)
+	case strings.HasPrefix(p, "/Systems/") && strings.Contains(p, "/VirtualMedia/Cd") && strings.HasSuffix(p, "/Actions/VirtualMedia.InsertMedia") && r.Method == http.MethodPost:
+		id := systemIDFrom(p, "/VirtualMedia/Cd/Actions/VirtualMedia.InsertMedia")
+		s.insertMedia(w, r, id)
+	case strings.HasPrefix(p, "/Systems/") && strings.Contains(p, "/VirtualMedia/Cd") && strings.HasSuffix(p, "/Actions/VirtualMedia.EjectMedia") && r.Method == http.MethodPost:
+		id := systemIDFrom(p, "/VirtualMedia/Cd/Actions/VirtualMedia.EjectMedia")
+		s.ejectMedia(w, r, id)
+	case strings.HasPrefix(p, "/Systems/") && strings.HasSuffix(p, "/VirtualMedia/Cd") && r.Method == http.MethodGet:
+		id := systemIDFrom(p, "/VirtualMedia/Cd")
+		s.virtualMediaCd(w, r, id)
+	case strings.HasPrefix(p, "/Managers/1/VirtualMedia/Cd/Actions/VirtualMedia.InsertMedia") && r.Method == http.MethodPost:
+		// Manager-scoped insert requires system query param
+		sys := r.URL.Query().Get("system")
+		s.insertMedia(w, r, sys)
+	case strings.HasPrefix(p, "/Managers/1/VirtualMedia/Cd/Actions/VirtualMedia.EjectMedia") && r.Method == http.MethodPost:
+		sys := r.URL.Query().Get("system")
+		s.ejectMedia(w, r, sys)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func systemIDFrom(p, suffix string) string {
+	p = strings.TrimPrefix(p, "/Systems/")
+	return strings.TrimSuffix(p, suffix)
+}
+
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("OData-Version", "4.0")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func (s *Server) serviceRoot(w http.ResponseWriter) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"@odata.context": "/redfish/v1/$metadata#ServiceRoot.ServiceRoot",
+		"@odata.id":      "/redfish/v1/",
+		"@odata.type":    "#ServiceRoot.v1_5_0.ServiceRoot",
+		"Id":             "RootService",
+		"Name":           "rf2vc",
+		"RedfishVersion": "1.6.0",
+		"UUID":           "00000000-0000-0000-0000-000000000001",
+		"Systems":        map[string]string{"@odata.id": "/redfish/v1/Systems"},
+		"Managers":       map[string]string{"@odata.id": "/redfish/v1/Managers"},
+	})
+}
+
+func (s *Server) systemsCollection(w http.ResponseWriter, r *http.Request) {
+	systems, err := s.vs.ListSystems(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	members := make([]map[string]string, 0, len(systems))
+	for _, sys := range systems {
+		members = append(members, map[string]string{
+			"@odata.id": "/redfish/v1/Systems/" + sys.UUID,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"@odata.id":           "/redfish/v1/Systems",
+		"@odata.type":         "#ComputerSystemCollection.ComputerSystemCollection",
+		"Name":                "Computer System Collection",
+		"Members@odata.count": len(members),
+		"Members":             members,
+	})
+}
+
+func (s *Server) systemGet(w http.ResponseWriter, r *http.Request, id string) {
+	sys, err := s.vs.GetSystem(r.Context(), id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"@odata.id":   "/redfish/v1/Systems/" + sys.UUID,
+		"@odata.type": "#ComputerSystem.v1_14_0.ComputerSystem",
+		"Id":          sys.UUID,
+		"Name":        sys.Name,
+		"UUID":        sys.UUID,
+		"SystemType":  "Virtual",
+		"PowerState":  sys.PowerState,
+		"MemorySummary": map[string]any{
+			"TotalSystemMemoryGiB": float64(sys.MemoryMiB) / 1024.0,
+		},
+		"ProcessorSummary": map[string]any{
+			"Count": sys.CPUs,
+		},
+		"Boot": map[string]any{
+			"BootSourceOverrideEnabled": "Disabled",
+			"BootSourceOverrideTarget":  "None",
+			"BootSourceOverrideMode":    "UEFI",
+		},
+		"Actions": map[string]any{
+			"#ComputerSystem.Reset": map[string]any{
+				"target": "/redfish/v1/Systems/" + sys.UUID + "/Actions/ComputerSystem.Reset",
+				"ResetType@Redfish.AllowableValues": []string{
+					"On", "ForceOff", "GracefulShutdown", "ForceRestart", "GracefulRestart", "PowerCycle", "Nmi",
+				},
+			},
+		},
+		"VirtualMedia": map[string]string{
+			"@odata.id": "/redfish/v1/Systems/" + sys.UUID + "/VirtualMedia",
+		},
+		"Links": map[string]any{
+			"ManagedBy": []map[string]string{
+				{"@odata.id": "/redfish/v1/Managers/1"},
+			},
+		},
+	})
+}
+
+func (s *Server) systemReset(w http.ResponseWriter, r *http.Request, id string) {
+	var body struct {
+		ResetType string `json:"ResetType"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.vs.Reset(r.Context(), id, body.ResetType); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) systemPatch(w http.ResponseWriter, r *http.Request, id string) {
+	var body struct {
+		Boot *struct {
+			BootSourceOverrideTarget  string `json:"BootSourceOverrideTarget"`
+			BootSourceOverrideEnabled string `json:"BootSourceOverrideEnabled"`
+		} `json:"Boot"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if body.Boot != nil {
+		target := strings.ToLower(body.Boot.BootSourceOverrideTarget)
+		if target == "cd" || target == "cdrom" || target == "usb" {
+			if err := s.vs.SetBootCDOnce(r.Context(), id); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) managersCollection(w http.ResponseWriter) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"@odata.id":           "/redfish/v1/Managers",
+		"@odata.type":         "#ManagerCollection.ManagerCollection",
+		"Name":                "Manager Collection",
+		"Members@odata.count": 1,
+		"Members": []map[string]string{
+			{"@odata.id": "/redfish/v1/Managers/1"},
+		},
+	})
+}
+
+func (s *Server) managerGet(w http.ResponseWriter) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"@odata.id":    "/redfish/v1/Managers/1",
+		"@odata.type":  "#Manager.v1_10_0.Manager",
+		"Id":           "1",
+		"Name":         "Gateway Manager",
+		"ManagerType":  "Service",
+		"VirtualMedia": map[string]string{"@odata.id": "/redfish/v1/Managers/1/VirtualMedia"},
+	})
+}
+
+func (s *Server) virtualMediaCollection(w http.ResponseWriter) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"@odata.id":           "/redfish/v1/Managers/1/VirtualMedia",
+		"@odata.type":         "#VirtualMediaCollection.VirtualMediaCollection",
+		"Name":                "Virtual Media Collection",
+		"Members@odata.count": 1,
+		"Members": []map[string]string{
+			{"@odata.id": "/redfish/v1/Managers/1/VirtualMedia/Cd"},
+		},
+	})
+}
+
+func (s *Server) systemVirtualMediaCollection(w http.ResponseWriter, id string) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"@odata.id":           "/redfish/v1/Systems/" + id + "/VirtualMedia",
+		"@odata.type":         "#VirtualMediaCollection.VirtualMediaCollection",
+		"Name":                "Virtual Media Collection",
+		"Members@odata.count": 1,
+		"Members": []map[string]string{
+			{"@odata.id": "/redfish/v1/Systems/" + id + "/VirtualMedia/Cd"},
+		},
+	})
+}
+
+func (s *Server) virtualMediaCd(w http.ResponseWriter, r *http.Request, systemID string) {
+	if systemID == "" {
+		systemID = r.URL.Query().Get("system")
+	}
+	st := vsphere.MediaStatus{}
+	odataID := "/redfish/v1/Managers/1/VirtualMedia/Cd"
+	insertTarget := "/redfish/v1/Managers/1/VirtualMedia/Cd/Actions/VirtualMedia.InsertMedia"
+	ejectTarget := "/redfish/v1/Managers/1/VirtualMedia/Cd/Actions/VirtualMedia.EjectMedia"
+	if systemID != "" {
+		st = s.vs.MediaStatus(systemID)
+		odataID = "/redfish/v1/Systems/" + systemID + "/VirtualMedia/Cd"
+		insertTarget = odataID + "/Actions/VirtualMedia.InsertMedia"
+		ejectTarget = odataID + "/Actions/VirtualMedia.EjectMedia"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"@odata.id":         odataID,
+		"@odata.type":       "#VirtualMedia.v1_3_0.VirtualMedia",
+		"Id":                "Cd",
+		"Name":              "Virtual CD",
+		"MediaTypes":        []string{"CD", "DVD"},
+		"Inserted":          st.Inserted,
+		"Image":             st.Image,
+		"WriteProtected":    true,
+		"ConnectedVia":      "URI",
+		"TransferProtocolType": "HTTP",
+		"Actions": map[string]any{
+			"#VirtualMedia.InsertMedia": map[string]any{"target": insertTarget},
+			"#VirtualMedia.EjectMedia":  map[string]any{"target": ejectTarget},
+		},
+	})
+}
+
+func (s *Server) insertMedia(w http.ResponseWriter, r *http.Request, systemID string) {
+	if systemID == "" {
+		http.Error(w, "system id required", http.StatusBadRequest)
+		return
+	}
+	var body struct {
+		Image          string `json:"Image"`
+		Inserted       *bool  `json:"Inserted"`
+		WriteProtected *bool  `json:"WriteProtected"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if body.Image == "" {
+		http.Error(w, "Image is required", http.StatusBadRequest)
+		return
+	}
+	log.Printf("InsertMedia system=%s image=%s", systemID, body.Image)
+	if err := s.vs.InsertMedia(r.Context(), systemID, body.Image); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) ejectMedia(w http.ResponseWriter, r *http.Request, systemID string) {
+	if systemID == "" {
+		http.Error(w, "system id required", http.StatusBadRequest)
+		return
+	}
+	log.Printf("EjectMedia system=%s", systemID)
+	if err := s.vs.EjectMedia(r.Context(), systemID); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

@@ -1,0 +1,225 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rf2vc-system
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: baseline
+    pod-security.kubernetes.io/warn: baseline
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rf2vc-sa
+  namespace: rf2vc-system
+imagePullSecrets:
+  - name: dasmlab-ghcr-pull
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: openshift-gitops-argocd-application-controller
+  namespace: rf2vc-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: admin
+subjects:
+  - kind: ServiceAccount
+    name: openshift-gitops-argocd-application-controller
+    namespace: openshift-gitops
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: system:openshift:scc:anyuid
+  namespace: rf2vc-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:openshift:scc:anyuid
+subjects:
+  - kind: ServiceAccount
+    name: rf2vc-sa
+    namespace: rf2vc-system
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rf2vc-gateway-config
+  namespace: rf2vc-system
+  labels:
+    app: rf2vc
+data:
+  gateway.yaml: |
+    listen: ":8080"
+    tlsCertFile: ""
+    tlsKeyFile: ""
+    auth:
+      username: "redfish"
+      password: "OVERRIDDEN_BY_SECRET"
+    vsphere:
+      url: "https://vcenter.example.local"
+      username: "OVERRIDDEN_BY_SECRET"
+      password: "OVERRIDDEN_BY_SECRET"
+      insecure: true
+      datacenter: "Datacenter"
+      datastore: "datastore1"
+      isoFolder: "rf2vc/isos"
+    isoCacheDir: "/var/tmp/rf2vc"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rf2vc
+  namespace: rf2vc-system
+  labels:
+    app: rf2vc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rf2vc
+  template:
+    metadata:
+      labels:
+        app: rf2vc
+    spec:
+      serviceAccountName: rf2vc-sa
+      securityContext:
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+      imagePullSecrets:
+        - name: dasmlab-ghcr-pull
+      containers:
+        - name: rf2vc
+          image: ghcr.io/dasmlab/rf2vc:__VERSION__
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+          args:
+            - -config
+            - /etc/rf2vc/gateway.yaml
+          env:
+            - name: RF2VC_LISTEN
+              value: ":8080"
+            - name: BUILD_VERSION
+              value: "__VERSION__"
+            - name: RF2VC_AUTH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: rf2vc-gateway
+                  key: auth-username
+            - name: RF2VC_AUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: rf2vc-gateway
+                  key: auth-password
+            - name: RF2VC_VSPHERE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: rf2vc-gateway
+                  key: vsphere-url
+            - name: RF2VC_VSPHERE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: rf2vc-gateway
+                  key: vsphere-username
+            - name: RF2VC_VSPHERE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: rf2vc-gateway
+                  key: vsphere-password
+            - name: RF2VC_VSPHERE_DATACENTER
+              valueFrom:
+                secretKeyRef:
+                  name: rf2vc-gateway
+                  key: vsphere-datacenter
+            - name: RF2VC_VSPHERE_DATASTORE
+              valueFrom:
+                secretKeyRef:
+                  name: rf2vc-gateway
+                  key: vsphere-datastore
+          volumeMounts:
+            - name: config
+              mountPath: /etc/rf2vc
+              readOnly: true
+            - name: iso-cache
+              mountPath: /var/tmp/rf2vc
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "25m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+      volumes:
+        - name: config
+          configMap:
+            name: rf2vc-gateway-config
+        - name: iso-cache
+          emptyDir:
+            sizeLimit: 8Gi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rf2vc
+  namespace: rf2vc-system
+  labels:
+    app: rf2vc
+spec:
+  selector:
+    app: rf2vc
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: rf2vc
+  namespace: rf2vc-system
+  labels:
+    app: rf2vc
+spec:
+  host: rf2vc.apps.2026-prod-1.ocp.dasmlab.org
+  to:
+    kind: Service
+    name: rf2vc
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None

@@ -1,0 +1,27 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: rf2vc-previews
+  namespace: openshift-gitops
+  labels:
+    app.kubernetes.io/part-of: rf2vc
+    dasmlab.org/cluster: 2026-prod-1
+spec:
+  project: default
+  source:
+    repoURL: git@github.com:lmcdasm/dasmlab-live-cicd.git
+    targetRevision: main
+    path: clusters/2026-prod-1/rf2vc/previews
+    directory:
+      recurse: false
+      include: "*.yaml"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: rf2vc-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - PruneLast=true

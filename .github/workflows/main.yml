@@ -1,0 +1,228 @@
+name: rf2vc CX Pipeline
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+env:
+  RUNNER_LABEL: self-hosted
+
+concurrency:
+  group: rf2vc-${{ github.ref == 'refs/heads/main' && 'prod' || format('preview-{0}', github.actor) }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  prepare:
+    runs-on: [self-hosted]
+    outputs:
+      version_tag: ${{ steps.meta.outputs.version_tag }}
+      is_prod: ${{ steps.meta.outputs.is_prod }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: meta
+        run: |
+          set -euo pipefail
+          echo "version_tag=v$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            echo "is_prod=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prod=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  test:
+    needs: prepare
+    runs-on: [self-hosted]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: Go test
+        run: go test ./...
+
+  build-publish:
+    needs: [prepare, test]
+    runs-on: [self-hosted]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve GHCR token
+        run: |
+          set -euo pipefail
+          token=""
+          if [ -f "/home/dasm/gh_token" ]; then
+            token="$(tr -d '\n\r' < /home/dasm/gh_token)"
+          fi
+          if [ -z "${token}" ]; then
+            token="${{ secrets.DASMLAB_GHCR_PAT }}"
+          fi
+          if [ -z "${token}" ] && [ -f "/home/dasm/gh-pat" ]; then
+            source /home/dasm/gh-pat
+            token="${DASMLAB_GHCR_PAT:-${GH_TOKEN:-}}"
+          fi
+          if [ -z "${token}" ]; then
+            echo "ERROR: GHCR token not set"
+            exit 1
+          fi
+          echo "::add-mask::${token}"
+          echo "GHCR_TOKEN=${token}" >> "$GITHUB_ENV"
+
+      - name: Build image
+        env:
+          VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
+        run: |
+          set -euo pipefail
+          if command -v buildah >/dev/null 2>&1; then
+            buildah bud \
+              --build-arg BUILD_VERSION="${VERSION_TAG}" \
+              -f deployments/containers/Containerfile \
+              -t "ghcr.io/dasmlab/rf2vc:${VERSION_TAG}" .
+          else
+            docker build \
+              --build-arg BUILD_VERSION="${VERSION_TAG}" \
+              -f deployments/containers/Containerfile \
+              -t "ghcr.io/dasmlab/rf2vc:${VERSION_TAG}" .
+          fi
+
+      - name: Push image
+        env:
+          VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
+        run: |
+          echo "${GHCR_TOKEN}" | docker login ghcr.io -u dasmlab --password-stdin
+          docker push "ghcr.io/dasmlab/rf2vc:${VERSION_TAG}"
+
+      - name: Smoke test
+        env:
+          VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
+        run: |
+          set -euo pipefail
+          cid="rf2vc-smoke-${GITHUB_SHA::8}"
+          docker rm -f "${cid}" 2>/dev/null || true
+          cfg="$(mktemp)"
+          cat > "${cfg}" <<'EOF'
+          listen: ":8080"
+          auth:
+            username: "redfish"
+            password: "smoke"
+          vsphere:
+            url: "https://vcenter.example.local"
+            username: "smoke@vsphere.local"
+            password: "smoke"
+            insecure: true
+            datacenter: "Datacenter"
+            datastore: "datastore1"
+          isoCacheDir: "/var/tmp/rf2vc"
+          EOF
+          docker run -d --name "${cid}" \
+            -v "${cfg}:/etc/rf2vc/gateway.yaml:ro" \
+            "ghcr.io/dasmlab/rf2vc:${VERSION_TAG}"
+          trap 'docker rm -f "${cid}" 2>/dev/null || true; rm -f "${cfg}"' EXIT
+          for _ in $(seq 1 30); do
+            if docker exec "${cid}" curl -fsS http://localhost:8080/healthz >/dev/null 2>&1; then
+              docker exec "${cid}" curl -fsS -u redfish:smoke http://localhost:8080/redfish/v1/
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs "${cid}" || true
+          exit 1
+
+  gitops-deploy:
+    needs: [prepare, build-publish]
+    if: success() && needs.prepare.outputs.is_prod == 'true'
+    runs-on: [self-hosted]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Ensure prod HAProxy cert
+        continue-on-error: true
+        env:
+          PREVIEW_PROXY_SSH_KEY: ${{ secrets.PREVIEW_PROXY_SSH_KEY }}
+          PREVIEW_PROXY_HOST: "10.20.1.10"
+          PREVIEW_PROXY_USER: "dasm"
+        run: |
+          chmod +x scripts/ci/ensure-prod-cert.sh
+          bash scripts/ci/ensure-prod-cert.sh "rf2vc.apps.2026-prod-1.ocp.dasmlab.org"
+
+      - name: GitOps sync
+        env:
+          VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
+        run: |
+          set -euo pipefail
+          DEPLOY_TOKEN=""
+          if [ -f "/home/dasm/gh_token" ]; then
+            DEPLOY_TOKEN="$(tr -d '\n\r' < /home/dasm/gh_token)"
+          fi
+          if [ -z "${DEPLOY_TOKEN}" ]; then
+            DEPLOY_TOKEN="${{ secrets.DASMLAB_GHCR_PAT }}"
+          fi
+          if [ -z "${DEPLOY_TOKEN}" ] && [ -f "/home/dasm/gh-pat" ]; then
+            source /home/dasm/gh-pat
+            DEPLOY_TOKEN="${DASMLAB_GHCR_PAT:-${GH_TOKEN:-}}"
+          fi
+          if [ -z "${DEPLOY_TOKEN}" ]; then
+            echo "ERROR: deploy token not set"
+            exit 1
+          fi
+
+          git clone "https://x-access-token:${DEPLOY_TOKEN}@github.com/lmcdasm/dasmlab-live-cicd.git"
+          TARGET_CLUSTERS=("2026-prod-1")
+
+          for CLUSTER_NAME in "${TARGET_CLUSTERS[@]}"; do
+            sed -e "s|__VERSION__|${VERSION_TAG}|g" \
+              k8s_envelope/rf2vc_deploy-ocp.yaml > "generated-${CLUSTER_NAME}.yaml"
+            DEPLOY_DIR="dasmlab-live-cicd/clusters/${CLUSTER_NAME}/rf2vc/live"
+            ARCHIVE_DIR="dasmlab-live-cicd/clusters/${CLUSTER_NAME}/rf2vc/archived"
+            mkdir -p "${DEPLOY_DIR}" "${ARCHIVE_DIR}"
+            for old in "${DEPLOY_DIR}"/rf2vc-v*.yaml; do
+              [ -e "${old}" ] && mv "${old}" "${ARCHIVE_DIR}/"
+            done
+            cp "generated-${CLUSTER_NAME}.yaml" "${DEPLOY_DIR}/rf2vc-${VERSION_TAG}.yaml"
+          done
+
+          cd dasmlab-live-cicd
+          git config user.name "dasmlab-bot"
+          git config user.email "ci@dasmlab.org"
+          git add .
+          if git diff --cached --quiet; then
+            echo "No GitOps changes"
+            exit 0
+          fi
+          git commit -m "Auto-publish rf2vc ${VERSION_TAG}"
+          git push
+
+  preview-deploy:
+    needs: [prepare, build-publish]
+    if: success() && needs.prepare.outputs.is_prod != 'true'
+    runs-on: [self-hosted]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Deploy developer preview
+        env:
+          VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
+          PREVIEW_ACTOR: ${{ github.actor }}
+          PREVIEW_PROXY_SSH_KEY: ${{ secrets.PREVIEW_PROXY_SSH_KEY }}
+          PREVIEW_PROXY_HOST: "10.20.1.10"
+          PREVIEW_PROXY_USER: "dasm"
+          DASMLAB_GHCR_PAT: ${{ secrets.DASMLAB_GHCR_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PREVIEW_PROXY_SSH_KEY}" ]; then
+            echo "ERROR: secret PREVIEW_PROXY_SSH_KEY is not set"
+            exit 1
+          fi
+          chmod +x scripts/ci/*.sh
+          ./scripts/ci/deploy-preview.sh

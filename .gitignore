@@ -1,0 +1,5 @@
+bin/
+configs/gateway.yaml
+*.exe
+.idea/
+.vscode/
