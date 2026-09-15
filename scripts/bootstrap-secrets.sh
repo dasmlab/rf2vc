@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Create/update rf2vc HTTP basic-auth secret + GHCR pull secret.
+# Create/update rf2vc HTTP basic-auth secret.
+# Image is public on ghcr.io/dasmlab/rf2vc — no pull secret required.
 # vCenter credentials are managed in the admin UI (PVC state.json).
-# Optional: export GOVC_* to seed the first vCenter on empty store.
 set -euo pipefail
 
 NS="${RF2VC_NAMESPACE:-rf2vc-system}"
@@ -21,12 +21,6 @@ fi
 
 "${OC[@]}" create namespace "${NS}" --dry-run=client -o yaml | "${OC[@]}" apply -f -
 
-if "${OC[@]}" get secret dasmlab-ghcr-pull -n ocp-dim-tool-system >/dev/null 2>&1; then
-  "${OC[@]}" get secret dasmlab-ghcr-pull -n ocp-dim-tool-system -o yaml \
-    | sed -e "s/namespace: ocp-dim-tool-system/namespace: ${NS}/" -e '/resourceVersion:/d' -e '/uid:/d' -e '/creationTimestamp:/d' \
-    | "${OC[@]}" apply -f -
-fi
-
 "${OC[@]}" create secret generic rf2vc-gateway \
   -n "${NS}" \
   --from-literal=auth-username="${AUTH_USER}" \
@@ -34,7 +28,4 @@ fi
   --dry-run=client -o yaml | "${OC[@]}" apply -f -
 
 echo "Auth secret ready in ${NS}"
-echo "Add vCenters + UUID map in the UI: https://rf2vc.apps.2026-prod-1.ocp.dasmlab.org/"
-if [[ -n "${GOVC_URL:-}" ]]; then
-  echo "Note: GOVC_* is set — pod will seed a vCenter on empty PVC if those vars are also in the Deployment env."
-fi
+echo "Next: oc apply -k deploy/openshift/  (edit route host / PVC storageClass as needed)"

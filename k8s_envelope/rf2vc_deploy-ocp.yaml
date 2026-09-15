@@ -13,8 +13,6 @@ kind: ServiceAccount
 metadata:
   name: rf2vc-sa
   namespace: rf2vc-system
-imagePullSecrets:
-  - name: dasmlab-ghcr-pull
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -103,8 +101,6 @@ spec:
       securityContext:
         fsGroup: 65532
         fsGroupChangePolicy: OnRootMismatch
-      imagePullSecrets:
-        - name: dasmlab-ghcr-pull
       containers:
         - name: rf2vc
           image: ghcr.io/dasmlab/rf2vc:__VERSION__

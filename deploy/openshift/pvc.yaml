@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rf2vc-data
+  namespace: rf2vc-system
+  labels:
+    app: rf2vc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  # Omit storageClassName to use the cluster default, or set e.g. ocs-storagecluster-ceph-rbd / lvms-vg1.
+  resources:
+    requests:
+      storage: 5Gi

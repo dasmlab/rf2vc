@@ -71,29 +71,27 @@ jobs:
           echo "::add-mask::${token}"
           echo "GHCR_TOKEN=${token}" >> "$GITHUB_ENV"
 
-      - name: Build image
+      - name: Build and push image
         env:
           VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
         run: |
           set -euo pipefail
+          IMAGE="ghcr.io/dasmlab/rf2vc:${VERSION_TAG}"
           if command -v buildah >/dev/null 2>&1; then
             buildah bud \
               --build-arg BUILD_VERSION="${VERSION_TAG}" \
               -f deployments/containers/Containerfile \
-              -t "ghcr.io/dasmlab/rf2vc:${VERSION_TAG}" .
+              -t "${IMAGE}" .
+            echo "${GHCR_TOKEN}" | buildah login -u dasmlab --password-stdin ghcr.io
+            buildah push "${IMAGE}"
           else
             docker build \
               --build-arg BUILD_VERSION="${VERSION_TAG}" \
               -f deployments/containers/Containerfile \
-              -t "ghcr.io/dasmlab/rf2vc:${VERSION_TAG}" .
+              -t "${IMAGE}" .
+            echo "${GHCR_TOKEN}" | docker login ghcr.io -u dasmlab --password-stdin
+            docker push "${IMAGE}"
           fi
-
-      - name: Push image
-        env:
-          VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
-        run: |
-          echo "${GHCR_TOKEN}" | docker login ghcr.io -u dasmlab --password-stdin
-          docker push "ghcr.io/dasmlab/rf2vc:${VERSION_TAG}"
 
       - name: Smoke test
         env:
@@ -102,6 +100,9 @@ jobs:
           set -euo pipefail
           cid="rf2vc-smoke-${GITHUB_SHA::8}"
           docker rm -f "${cid}" 2>/dev/null || true
+          # Prefer docker; fall back to podman for runtime
+          RUNNER=docker
+          command -v docker >/dev/null 2>&1 || RUNNER=podman
           cfg="$(mktemp)"
           datadir="$(mktemp -d)"
           cat > "${cfg}" <<'EOF'
@@ -112,20 +113,20 @@ jobs:
           dataDir: "/data"
           isoCacheDir: "/data/iso-cache"
           EOF
-          docker run -d --name "${cid}" \
+          ${RUNNER} run -d --name "${cid}" \
             -v "${cfg}:/etc/rf2vc/gateway.yaml:ro" \
             -v "${datadir}:/data" \
             "ghcr.io/dasmlab/rf2vc:${VERSION_TAG}"
-          trap 'docker rm -f "${cid}" 2>/dev/null || true; rm -f "${cfg}"; rm -rf "${datadir}"' EXIT
+          trap '${RUNNER} rm -f "${cid}" 2>/dev/null || true; rm -f "${cfg}"; rm -rf "${datadir}"' EXIT
           for _ in $(seq 1 30); do
-            if docker exec "${cid}" curl -fsS http://localhost:8080/healthz >/dev/null 2>&1; then
-              docker exec "${cid}" curl -fsS -u redfish:smoke http://localhost:8080/api/v1/status
-              docker exec "${cid}" curl -fsS -u redfish:smoke http://localhost:8080/redfish/v1/
+            if ${RUNNER} exec "${cid}" curl -fsS http://localhost:8080/healthz >/dev/null 2>&1; then
+              ${RUNNER} exec "${cid}" curl -fsS -u redfish:smoke http://localhost:8080/api/v1/status
+              ${RUNNER} exec "${cid}" curl -fsS -u redfish:smoke http://localhost:8080/redfish/v1/
               exit 0
             fi
             sleep 2
           done
-          docker logs "${cid}" || true
+          ${RUNNER} logs "${cid}" || true
           exit 1
 
   gitops-deploy:

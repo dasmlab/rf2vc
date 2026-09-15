@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: rf2vc-system
+
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - pvc.yaml
+  - configmap.yaml
+  - deployment.yaml
+  - service.yaml
+  - route.yaml
+
+images:
+  - name: ghcr.io/dasmlab/rf2vc
+    newTag: v2026.09.15-8ed4d09
+
+commonLabels:
+  app.kubernetes.io/name: rf2vc
+  app.kubernetes.io/part-of: rf2vc

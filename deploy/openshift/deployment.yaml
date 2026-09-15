@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rf2vc
+  namespace: rf2vc-system
+  labels:
+    app: rf2vc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rf2vc
+  template:
+    metadata:
+      labels:
+        app: rf2vc
+    spec:
+      serviceAccountName: rf2vc-sa
+      securityContext:
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: rf2vc
+          image: ghcr.io/dasmlab/rf2vc:v2026.09.15-8ed4d09
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+          args:
+            - -config
+            - /etc/rf2vc/gateway.yaml
+          env:
+            - name: RF2VC_LISTEN
+              value: ":8080"
+            - name: RF2VC_DATA_DIR
+              value: "/data"
+            - name: BUILD_VERSION
+              value: "v2026.09.15-8ed4d09"
+            - name: RF2VC_AUTH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: rf2vc-gateway
+                  key: auth-username
+            - name: RF2VC_AUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: rf2vc-gateway
+                  key: auth-password
+          volumeMounts:
+            - name: config
+              mountPath: /etc/rf2vc
+              readOnly: true
+            - name: data
+              mountPath: /data
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "25m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+      volumes:
+        - name: config
+          configMap:
+            name: rf2vc-gateway-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: rf2vc-data

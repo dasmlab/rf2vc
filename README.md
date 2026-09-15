@@ -1,29 +1,53 @@
 # rf2vc — Redfish → vSphere gateway
 
-Minimal **Redfish BMC facade** in front of one or more **vCenters**, with a UUID→vCenter
+Public **Redfish BMC facade** in front of one or more **vCenters**, with a UUID→vCenter
 map so ACM/MCE BareMetalHost (`redfish-virtualmedia://.../Systems/<BIOS-UUID>`) routes
 to the right inventory.
+
+| | |
+|---|---|
+| Source | https://github.com/dasmlab/rf2vc |
+| Image | `ghcr.io/dasmlab/rf2vc:<tag>` (public — no pull secret) |
 
 ```
 Admin UI ──► /data/state.json (PVC) ──► in-memory map
 BMH/Ironic ──Redfish──► rf2vc ──govmomi──► vCenter A / B / …
 ```
 
-## Prod (2026-prod-1)
+## Deploy on OpenShift
 
-| Item | Value |
-|---|---|
-| UI / API | `https://rf2vc.apps.2026-prod-1.ocp.dasmlab.org/` |
-| Redfish | `https://rf2vc.apps.2026-prod-1.ocp.dasmlab.org/redfish/v1/` |
-| Namespace | `rf2vc-system` |
-| PVC | `rf2vc-data` → `/data/state.json` |
-| Image | `ghcr.io/dasmlab/rf2vc:<version>` |
+```bash
+# 1) Auth secret (required)
+export RF2VC_AUTH_PASSWORD='pick-a-strong-password'
+./scripts/bootstrap-secrets.sh
 
-Open the UI (HTTP basic auth), add GOVC-shaped vCenters, bind BIOS UUIDs.
+# 2) Optional: set image tag / PVC storageClass / route host
+#    edit deploy/openshift/kustomization.yaml (images.newTag)
+#    edit deploy/openshift/pvc.yaml if you need a specific StorageClass
+#    edit deploy/openshift/route.yaml to set an explicit host
+
+# 3) Apply
+oc apply -k deploy/openshift/
+
+# 4) Watch
+oc -n rf2vc-system get pods,route
+oc -n rf2vc-system get route rf2vc -o jsonpath='{.spec.host}{"\n"}'
+```
+
+Or apply the example secret from the template:
+
+```bash
+cp deploy/openshift/secret.example.yaml /tmp/rf2vc-secret.yaml
+# edit auth-password
+oc apply -f /tmp/rf2vc-secret.yaml
+oc apply -k deploy/openshift/
+```
+
+BMH example (replace host + secret):
 
 ```yaml
 bmc:
-  address: "redfish-virtualmedia://rf2vc.apps.2026-prod-1.ocp.dasmlab.org/redfish/v1/Systems/<BIOS-UUID>"
+  address: "redfish-virtualmedia://rf2vc.apps.<cluster>/redfish/v1/Systems/<BIOS-UUID>"
   credentialsName: <secret matching rf2vc auth>
   disableCertificateVerification: true
 ```
@@ -54,6 +78,7 @@ export GOVC_INSECURE=1
 - `GET|POST /api/v1/vcenters`
 - `GET|PUT|DELETE /api/v1/vcenters/{id}`
 - `POST /api/v1/vcenters/{id}/test`
+- `GET /api/v1/vcenters/{id}/iso-status`
 - `GET|POST /api/v1/mappings`
 - `PUT|DELETE /api/v1/mappings/{uuid}`
 
@@ -66,5 +91,6 @@ internal/vsphere/      per-VC client + pool
 internal/redfish/      Redfish surface (map-routed)
 internal/api/          management REST
 web/                   embedded admin UI (go:embed)
-k8s_envelope/          OCP + PVC + Argo
+deploy/openshift/      portable OCP manifests (kustomize)
+k8s_envelope/          dasmlab GitOps envelope + Argo Application
 ```

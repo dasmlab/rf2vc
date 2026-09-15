@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rf2vc-gateway-config
+  namespace: rf2vc-system
+  labels:
+    app: rf2vc
+data:
+  gateway.yaml: |
+    listen: ":8080"
+    tlsCertFile: ""
+    tlsKeyFile: ""
+    auth:
+      username: "redfish"
+      password: "OVERRIDDEN_BY_SECRET"
+    dataDir: "/data"
+    isoCacheDir: "/data/iso-cache"

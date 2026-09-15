@@ -20,6 +20,15 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 # Stage 2: Runtime
 FROM docker.io/library/debian:bookworm-slim
 
+ARG BUILD_VERSION=dev
+LABEL org.opencontainers.image.source="https://github.com/dasmlab/rf2vc" \
+      org.opencontainers.image.url="https://github.com/dasmlab/rf2vc" \
+      org.opencontainers.image.title="rf2vc" \
+      org.opencontainers.image.description="Redfish BMC facade over vSphere for ACM/MCE BareMetalHost" \
+      org.opencontainers.image.version="${BUILD_VERSION}" \
+      org.opencontainers.image.vendor="dasmlab" \
+      org.opencontainers.image.licenses="Apache-2.0"
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
