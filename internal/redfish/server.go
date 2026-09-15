@@ -38,12 +38,23 @@ func (s *Server) Handler() http.Handler {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte("rf2vc — Redfish → vSphere gateway\n\n" +
+			"GET  /healthz\n" +
+			"GET  /redfish/v1/          (basic auth)\n" +
+			"GET  /redfish/v1/Systems   (basic auth)\n"))
+	})
 	mux.HandleFunc("/redfish/v1/", s.route)
 	mux.HandleFunc("/redfish/v1", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/redfish/v1/", http.StatusPermanentRedirect)
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" {
+		if r.URL.Path == "/healthz" || r.URL.Path == "/" {
 			mux.ServeHTTP(w, r)
 			return
 		}
