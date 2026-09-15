@@ -53,23 +53,16 @@ jobs:
       - name: Resolve GHCR token
         run: |
           set -euo pipefail
-          token=""
-          if [ -f "/home/dasm/gh_token" ]; then
-            token="$(tr -d '\n\r' < /home/dasm/gh_token)"
-          fi
+          # Always publish with GITHUB_TOKEN so the package is linked to this
+          # public repository and inherits public visibility (anonymous pulls).
+          token="${{ secrets.GITHUB_TOKEN }}"
           if [ -z "${token}" ]; then
-            token="${{ secrets.DASMLAB_GHCR_PAT }}"
-          fi
-          if [ -z "${token}" ] && [ -f "/home/dasm/gh-pat" ]; then
-            source /home/dasm/gh-pat
-            token="${DASMLAB_GHCR_PAT:-${GH_TOKEN:-}}"
-          fi
-          if [ -z "${token}" ]; then
-            echo "ERROR: GHCR token not set"
+            echo "ERROR: GITHUB_TOKEN unavailable"
             exit 1
           fi
           echo "::add-mask::${token}"
           echo "GHCR_TOKEN=${token}" >> "$GITHUB_ENV"
+          echo "GHCR_USER=${{ github.actor }}" >> "$GITHUB_ENV"
 
       - name: Build and push image
         env:
@@ -77,20 +70,23 @@ jobs:
         run: |
           set -euo pipefail
           IMAGE="ghcr.io/dasmlab/rf2vc:${VERSION_TAG}"
+          LATEST="ghcr.io/dasmlab/rf2vc:latest"
           if command -v buildah >/dev/null 2>&1; then
             buildah bud \
               --build-arg BUILD_VERSION="${VERSION_TAG}" \
               -f deployments/containers/Containerfile \
-              -t "${IMAGE}" .
-            echo "${GHCR_TOKEN}" | buildah login -u dasmlab --password-stdin ghcr.io
+              -t "${IMAGE}" -t "${LATEST}" .
+            echo "${GHCR_TOKEN}" | buildah login -u "${GHCR_USER}" --password-stdin ghcr.io
             buildah push "${IMAGE}"
+            buildah push "${LATEST}"
           else
             docker build \
               --build-arg BUILD_VERSION="${VERSION_TAG}" \
               -f deployments/containers/Containerfile \
-              -t "${IMAGE}" .
-            echo "${GHCR_TOKEN}" | docker login ghcr.io -u dasmlab --password-stdin
+              -t "${IMAGE}" -t "${LATEST}" .
+            echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USER}" --password-stdin
             docker push "${IMAGE}"
+            docker push "${LATEST}"
           fi
 
       - name: Smoke test

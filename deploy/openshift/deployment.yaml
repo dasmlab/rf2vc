@@ -21,7 +21,7 @@ spec:
         fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: rf2vc
-          image: ghcr.io/dasmlab/rf2vc:v2026.09.15-8ed4d09
+          image: ghcr.io/dasmlab/rf2vc:v2026.09.15-b0296de
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -37,7 +37,7 @@ spec:
             - name: RF2VC_DATA_DIR
               value: "/data"
             - name: BUILD_VERSION
-              value: "v2026.09.15-8ed4d09"
+              value: "v2026.09.15-b0296de"
             - name: RF2VC_AUTH_USERNAME
               valueFrom:
                 secretKeyRef:
