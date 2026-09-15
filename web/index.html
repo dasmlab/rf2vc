@@ -19,65 +19,45 @@
         <p class="caps">DASMLAB · tools</p>
         <h1 class="brand">rf2vc</h1>
         <p class="headline">Redfish to vSphere. <span class="accent">Map with personality.</span></p>
-        <p class="lede">Bind BIOS UUIDs to vCenters so BMH <code>/redfish/v1/Systems/&lt;uuid&gt;</code> routes cleanly.</p>
+        <p class="lede">Configure vCenters, bind BIOS UUIDs, and route BMH <code>/redfish/v1/Systems/&lt;uuid&gt;</code>.</p>
         <div class="cta-row">
-          <button type="button" class="pill primary" id="btnNewVC">Add vCenter</button>
-          <button type="button" class="pill ghost" id="btnFocusMap">Lab map</button>
+          <button type="button" class="pill primary" id="btnAddVC">Add vCenter</button>
           <span class="status-chip" id="statusLine">loading…</span>
         </div>
       </div>
     </header>
 
-    <section class="map-block rise" style="--d:80ms" id="mapBlock">
-      <div class="map-kicker">
-        <span class="caps">Gateway map</span>
-        <span class="hint">Click a vCenter or UUID — detail opens beside the map</span>
-      </div>
-      <div class="map-split">
-        <div class="shell map-shell">
-          <svg id="gatewayMap" class="gateway-map" viewBox="0 0 640 420" role="img" aria-label="UUID to vCenter map"></svg>
-          <p class="map-empty hidden" id="mapEmpty">Add a vCenter to light up the map.</p>
-        </div>
-        <aside class="shell detail-shell" id="detailPane">
-          <p class="caps">Detail</p>
-          <div id="detailBody" class="detail-body">
-            <div class="detail-placeholder">
-              <div class="ph-icon" aria-hidden="true"></div>
-              <p>Select a lane. vCenter forms, UUID binds, and deep-links appear here — map stays clean.</p>
-            </div>
+    <section class="workspace rise" style="--d:80ms">
+      <aside class="shell vc-pane">
+        <div class="pane-head">
+          <div>
+            <p class="caps">Inventory</p>
+            <h2 class="pane-title">vCenters</h2>
           </div>
-        </aside>
-      </div>
-    </section>
-
-    <section class="manage rise" style="--d:140ms">
-      <div class="manage-head">
-        <div>
-          <p class="caps">Bindings</p>
-          <h2 class="section-title">UUID map</h2>
+          <button type="button" class="pill ghost sm" id="btnAddVC2">Add</button>
         </div>
-        <input type="search" id="mapFilter" class="search" placeholder="Filter uuid / name…" />
-      </div>
-      <form id="mapForm" class="bind-form shell">
-        <label>BIOS UUID <input name="uuid" required placeholder="4235a1b2-…" /></label>
-        <label>vCenter
-          <select name="vcenterId" id="mapVCSelect" required></select>
-        </label>
-        <label>Name <input name="name" placeholder="MO-OCLAB-CP01" /></label>
-        <label>Notes <input name="notes" /></label>
-        <button type="submit" class="pill primary">Bind</button>
-      </form>
-      <p class="msg" id="mapMsg"></p>
-      <div id="mapList" class="chip-row"></div>
-    </section>
+        <div id="vcList" class="vc-list"></div>
+      </aside>
 
-    <!-- Hidden working form; shown in detail pane via clone/move -->
-    <form id="vcForm" class="vc-form hidden">
+      <main class="shell detail-pane" id="detailPane">
+        <div id="detailBody">
+          <div class="empty-state">
+            <div class="ph-icon" aria-hidden="true"></div>
+            <p class="empty-title">Select a vCenter</p>
+            <p>Pick one on the left to see its UUIDs, edit connection settings, or bind a new system.</p>
+          </div>
+        </div>
+      </main>
+    </section>
+  </div>
+
+  <template id="tplVCForm">
+    <form class="vc-form" id="vcForm">
       <input type="hidden" name="id" />
       <label>Name <input name="name" required placeholder="lab-vc" /></label>
       <label>URL <input name="url" required placeholder="https://vcenter.example.local" /></label>
       <label>Username <input name="username" required placeholder="administrator@vsphere.local" /></label>
-      <label>Password <input name="password" type="password" placeholder="leave blank to keep" autocomplete="new-password" /></label>
+      <label>Password <input name="password" type="password" placeholder="required for new / leave blank to keep" autocomplete="new-password" /></label>
       <div class="row2">
         <label>Datacenter <input name="datacenter" required /></label>
         <label>Datastore <input name="datastore" required /></label>
@@ -87,12 +67,13 @@
       <label>Notes <input name="notes" /></label>
       <div class="actions">
         <button type="submit" class="pill primary">Save</button>
-        <button type="button" class="pill ghost" id="btnTestVC">Test</button>
-        <button type="button" class="pill ghost" id="btnCancelVC">Cancel</button>
+        <button type="button" class="pill ghost" data-action="test">Test</button>
+        <button type="button" class="pill ghost" data-action="cancel">Cancel</button>
       </div>
-      <p class="msg" id="vcMsg"></p>
+      <p class="msg" data-msg="vc"></p>
     </form>
-  </div>
+  </template>
+
   <script src="/static/app.js"></script>
 </body>
 </html>

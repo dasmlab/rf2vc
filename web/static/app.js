@@ -1,6 +1,4 @@
 const $ = (sel, el = document) => el.querySelector(sel);
-const LANES = ["var(--lane-0)", "var(--lane-1)", "var(--lane-2)", "var(--lane-3)", "var(--lane-4)", "var(--lane-5)"];
-const LANE_HEX = ["#c45c4a", "#d4894a", "#2f8f7d", "#976eb0", "#4a7fc5", "#8aa63a"];
 
 async function api(path, opts = {}) {
   const res = await fetch(path, {
@@ -18,21 +16,26 @@ async function api(path, opts = {}) {
   return body;
 }
 
-function setMsg(el, text, ok) {
-  if (!el) return;
-  el.textContent = text || "";
-  el.className = "msg " + (ok === true ? "ok" : ok === false ? "err" : "");
-}
-
 function escapeHtml(s) {
   return String(s || "").replace(/[&<>"']/g, c => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
   }[c]));
 }
 
+function setMsg(el, text, ok) {
+  if (!el) return;
+  el.textContent = text || "";
+  el.className = "msg " + (ok === true ? "ok" : ok === false ? "err" : "");
+}
+
 let vcenters = [];
 let mappings = [];
-let selection = null; // { type: 'vc'|'uuid'|'form', id }
+/** @type {null | { mode: 'view'|'edit'|'create', id?: string }} */
+let ui = null;
+
+function mappingsFor(vcId) {
+  return mappings.filter(m => m.vcenterId === vcId);
+}
 
 async function refreshStatus() {
   const st = await api("/api/v1/status");
@@ -40,134 +43,39 @@ async function refreshStatus() {
     `${st.version} · ${st.vcenters} vCenter · ${st.mappings} UUID`;
 }
 
-function fillVCSelect() {
-  const sel = $("#mapVCSelect");
-  const cur = sel.value;
-  sel.innerHTML = vcenters.map(v =>
-    `<option value="${v.id}">${escapeHtml(v.name || v.url)}</option>`
-  ).join("");
-  if (cur) sel.value = cur;
-}
-
-function vcName(id) {
-  return (vcenters.find(v => v.id === id) || {}).name || id;
-}
-
-function laneColor(i) {
-  return LANE_HEX[i % LANE_HEX.length];
-}
-
-function renderMap() {
-  const svg = $("#gatewayMap");
-  const empty = $("#mapEmpty");
+function renderVCList() {
+  const box = $("#vcList");
   if (!vcenters.length) {
-    svg.innerHTML = "";
-    empty.classList.remove("hidden");
+    box.innerHTML = `<div class="vc-empty">No vCenters yet.<br/>Click <strong>Add</strong> to create one.</div>`;
     return;
   }
-  empty.classList.add("hidden");
-
-  const W = 640, H = 420;
-  const cx = 200, cy = 210;
-  const n = vcenters.length;
-  const defs = `
-    <defs>
-      <radialGradient id="hubGrad" cx="35%" cy="30%" r="70%">
-        <stop offset="0%" stop-color="#3f9f8e"/>
-        <stop offset="100%" stop-color="#1f6f62"/>
-      </radialGradient>
-    </defs>`;
-
-  let spokes = "";
-  let nodes = "";
-  vcenters.forEach((vc, i) => {
-    const angle = -Math.PI / 2 + (i / Math.max(n, 1)) * Math.PI * 2 + (n === 1 ? Math.PI / 8 : 0);
-    const r = n === 1 ? 150 : 155;
-    const x = cx + Math.cos(angle) * r;
-    const y = cy + Math.sin(angle) * r;
-    const color = laneColor(i);
-    const bound = mappings.filter(m => m.vcenterId === vc.id);
-    spokes += `<path class="spoke" d="M${cx} ${cy} L${x} ${y}" stroke="${color}" />`;
-
-    const label = (vc.name || "vCenter").slice(0, 16);
-    const selected = selection?.type === "vc" && selection.id === vc.id;
-    nodes += `
-      <g class="lane-pill" data-vc="${vc.id}" transform="translate(${x}, ${y})">
-        ${selected ? `<circle class="selected-ring" r="34" />` : ""}
-        <rect x="-58" y="-18" width="116" height="36" rx="18" stroke="${color}" />
-        <text y="5" fill="${color}">${escapeHtml(label)}</text>
-      </g>`;
-
-    bound.slice(0, 5).forEach((m, j) => {
-      const a2 = angle + (j - (Math.min(bound.length, 5) - 1) / 2) * 0.22;
-      const r2 = r + 78;
-      const ux = cx + Math.cos(a2) * r2;
-      const uy = cy + Math.sin(a2) * r2;
-      const usel = selection?.type === "uuid" && selection.id === m.uuid;
-      spokes += `<path class="spoke" d="M${x} ${y} L${ux} ${uy}" stroke="${color}" opacity="0.35" />`;
-      nodes += `
-        <g class="uuid-node" data-uuid="${escapeHtml(m.uuid)}" transform="translate(${ux}, ${uy})">
-          <circle class="uuid-dot" r="${usel ? 8 : 6}" fill="${color}" />
-          <text class="uuid-label" y="18">${escapeHtml((m.name || m.uuid).slice(0, 14))}</text>
-        </g>`;
-    });
-  });
-
-  svg.innerHTML = `
-    ${defs}
-    ${spokes}
-    <g class="node-hub">
-      <circle cx="${cx}" cy="${cy}" r="48" />
-      <text x="${cx}" y="${cy + 5}">rf2vc</text>
-    </g>
-    ${nodes}
-  `;
+  box.innerHTML = vcenters.map(vc => {
+    const n = mappingsFor(vc.id).length;
+    const active = ui && (ui.id === vc.id || (ui.mode === "edit" && ui.id === vc.id));
+    return `
+      <button type="button" class="vc-item ${active ? "active" : ""}" data-select="${vc.id}">
+        <div class="name">${escapeHtml(vc.name)}</div>
+        <p class="meta">${escapeHtml(vc.url)}</p>
+        <p class="meta">${escapeHtml(vc.datacenter)} / ${escapeHtml(vc.datastore)}</p>
+        <span class="count">${n} UUID${n === 1 ? "" : "s"}</span>
+      </button>`;
+  }).join("");
 }
 
-function showDetailPlaceholder() {
+function emptyDetail() {
   $("#detailBody").innerHTML = `
-    <div class="detail-placeholder">
+    <div class="empty-state">
       <div class="ph-icon" aria-hidden="true"></div>
-      <p>Select a lane. vCenter forms, UUID binds, and deep-links appear here — map stays clean.</p>
+      <p class="empty-title">Select a vCenter</p>
+      <p>Pick one on the left to see its UUIDs, edit connection settings, or bind a new system.</p>
     </div>`;
 }
 
-function showVCDetail(vc) {
-  selection = { type: "vc", id: vc.id };
-  const bound = mappings.filter(m => m.vcenterId === vc.id);
-  $("#detailBody").innerHTML = `
-    <h3 class="detail-title">${escapeHtml(vc.name)}</h3>
-    <p class="detail-meta">${escapeHtml(vc.url)}</p>
-    <p class="detail-meta">${escapeHtml(vc.datacenter)} / ${escapeHtml(vc.datastore)} · ${escapeHtml(vc.username)}${vc.insecure ? " · insecure" : ""}</p>
-    <p class="detail-meta">${bound.length} UUID binding(s)</p>
-    <div class="detail-actions">
-      <button type="button" class="pill primary" data-edit-vc="${vc.id}">Edit</button>
-      <button type="button" class="pill danger" data-del-vc="${vc.id}">Delete</button>
-    </div>
-    <div id="detailFormSlot"></div>
-  `;
-  renderMap();
+function cloneVCForm() {
+  return $("#tplVCForm").content.firstElementChild.cloneNode(true);
 }
 
-function showUUIDDetail(m) {
-  selection = { type: "uuid", id: m.uuid };
-  $("#detailBody").innerHTML = `
-    <h3 class="detail-title">${escapeHtml(m.name || "System")}</h3>
-    <p class="detail-meta">${escapeHtml(m.uuid)}</p>
-    <p class="detail-meta">→ ${escapeHtml(vcName(m.vcenterId))}</p>
-    ${m.notes ? `<p class="detail-meta">${escapeHtml(m.notes)}</p>` : ""}
-    <p class="detail-meta">Redfish: <code>/redfish/v1/Systems/${escapeHtml(m.uuid)}</code></p>
-    <div class="detail-actions">
-      <button type="button" class="pill danger" data-unmap="${escapeHtml(m.uuid)}">Remove binding</button>
-    </div>
-  `;
-  renderMap();
-}
-
-function showVCForm(vc) {
-  selection = { type: "form", id: vc?.id || "new" };
-  const form = $("#vcForm");
-  form.classList.remove("hidden");
+function fillVCForm(form, vc) {
   form.id.value = vc?.id || "";
   form.name.value = vc?.name || "";
   form.url.value = vc?.url || "";
@@ -178,205 +86,231 @@ function showVCForm(vc) {
   form.isoFolder.value = vc?.isoFolder || "rf2vc/isos";
   form.insecure.checked = !!vc?.insecure;
   form.notes.value = vc?.notes || "";
+}
+
+function showCreateForm() {
+  ui = { mode: "create" };
+  renderVCList();
+  const form = cloneVCForm();
+  fillVCForm(form, null);
+  $("#detailBody").innerHTML = `
+    <div class="detail-head">
+      <div>
+        <p class="caps">New endpoint</p>
+        <h2 class="detail-title">Add vCenter</h2>
+        <p class="detail-meta">GOVC-shaped fields. Credentials persist on the PVC map.</p>
+      </div>
+    </div>`;
+  $("#detailBody").appendChild(form);
+  wireVCForm(form);
+}
+
+function showEditForm(vc) {
+  ui = { mode: "edit", id: vc.id };
+  renderVCList();
+  const form = cloneVCForm();
+  fillVCForm(form, vc);
+  $("#detailBody").innerHTML = `
+    <div class="detail-head">
+      <div>
+        <p class="caps">Edit endpoint</p>
+        <h2 class="detail-title">${escapeHtml(vc.name)}</h2>
+        <p class="detail-meta">Leave password blank to keep the stored secret.</p>
+      </div>
+    </div>`;
+  $("#detailBody").appendChild(form);
+  wireVCForm(form);
+}
+
+function showVCView(vc) {
+  ui = { mode: "view", id: vc.id };
+  renderVCList();
+  const rows = mappingsFor(vc.id);
+  const uuidBlock = rows.length
+    ? rows.map(m => `
+        <div class="uuid-row">
+          <div>
+            <div class="title">${escapeHtml(m.name || "System")}</div>
+            <div class="meta">${escapeHtml(m.uuid)}</div>
+            ${m.notes ? `<div class="meta">${escapeHtml(m.notes)}</div>` : ""}
+            <div class="path">/redfish/v1/Systems/${escapeHtml(m.uuid)}</div>
+          </div>
+          <button type="button" class="pill danger sm" data-unmap="${escapeHtml(m.uuid)}">Remove</button>
+        </div>`).join("")
+    : `<div class="vc-empty">No UUIDs bound to this vCenter yet.</div>`;
 
   $("#detailBody").innerHTML = `
-    <h3 class="detail-title">${vc ? "Edit vCenter" : "Add vCenter"}</h3>
-    <p class="detail-meta">GOVC-shaped fields. Passwords stay on the PVC map.</p>
-    <div id="detailFormSlot"></div>
-  `;
-  $("#detailFormSlot").appendChild(form);
-  setMsg($("#vcMsg"), vc ? "Leave password blank to keep." : "New endpoint", true);
-  renderMap();
-}
-
-function renderMaps() {
-  const q = ($("#mapFilter").value || "").toLowerCase();
-  const rows = mappings.filter(m => {
-    const hay = `${m.uuid} ${m.name || ""} ${m.notes || ""} ${vcName(m.vcenterId)}`.toLowerCase();
-    return !q || hay.includes(q);
-  });
-  const box = $("#mapList");
-  if (!rows.length) {
-    box.innerHTML = `<div class="chip"><div class="meta">No UUID bindings${q ? " match" : " yet"}.</div></div>`;
-    return;
-  }
-  box.innerHTML = rows.map(m => `
-    <div class="chip" data-open-uuid="${escapeHtml(m.uuid)}">
-      <div class="title">${escapeHtml(m.name || m.uuid)}</div>
-      <div class="meta">${escapeHtml(m.uuid)}</div>
-      <div class="meta">→ ${escapeHtml(vcName(m.vcenterId))}</div>
-      <div class="row-actions">
-        <button type="button" class="pill ghost" data-open-uuid="${escapeHtml(m.uuid)}">Open</button>
-        <button type="button" class="pill danger" data-unmap="${escapeHtml(m.uuid)}">Remove</button>
+    <div class="detail-head">
+      <div>
+        <p class="caps">vCenter</p>
+        <h2 class="detail-title">${escapeHtml(vc.name)}</h2>
+        <p class="detail-meta">${escapeHtml(vc.url)}</p>
+        <p class="detail-meta">${escapeHtml(vc.datacenter)} / ${escapeHtml(vc.datastore)} · ${escapeHtml(vc.username)}${vc.insecure ? " · insecure" : ""}</p>
+        ${vc.notes ? `<p class="detail-meta">${escapeHtml(vc.notes)}</p>` : ""}
+      </div>
+      <div class="detail-actions">
+        <button type="button" class="pill ghost sm" data-edit="${vc.id}">Edit</button>
+        <button type="button" class="pill danger sm" data-delete="${vc.id}">Delete</button>
       </div>
     </div>
-  `).join("");
+
+    <div class="section-block">
+      <h3>UUID bindings (${rows.length})</h3>
+      <div class="uuid-list">${uuidBlock}</div>
+      <form class="bind-form" id="bindForm">
+        <label>BIOS UUID <input name="uuid" required placeholder="4235a1b2-…" /></label>
+        <label>Name <input name="name" placeholder="MO-OCLAB-CP01" /></label>
+        <label>Notes <input name="notes" /></label>
+        <button type="submit" class="pill primary">Bind UUID</button>
+      </form>
+      <p class="msg" id="bindMsg"></p>
+    </div>
+  `;
+
+  $("#bindForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    try {
+      await api("/api/v1/mappings", {
+        method: "POST",
+        body: JSON.stringify({
+          uuid: f.uuid.value.trim(),
+          vcenterId: vc.id,
+          name: f.name.value.trim(),
+          notes: f.notes.value.trim(),
+        }),
+      });
+      setMsg($("#bindMsg"), "Bound", true);
+      await reload(vc.id);
+    } catch (err) {
+      setMsg($("#bindMsg"), err.message, false);
+    }
+  });
 }
 
-async function reload() {
+function wireVCForm(form) {
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const body = {
+      name: form.name.value.trim(),
+      url: form.url.value.trim(),
+      username: form.username.value.trim(),
+      password: form.password.value,
+      datacenter: form.datacenter.value.trim(),
+      datastore: form.datastore.value.trim(),
+      isoFolder: form.isoFolder.value.trim() || "rf2vc/isos",
+      insecure: form.insecure.checked,
+      notes: form.notes.value.trim(),
+    };
+    const msg = form.querySelector('[data-msg="vc"]');
+    try {
+      let out;
+      if (form.id.value) {
+        out = await api(`/api/v1/vcenters/${form.id.value}`, {
+          method: "PUT",
+          body: JSON.stringify(body),
+        });
+      } else {
+        if (!body.password) throw new Error("password required for new vCenter");
+        out = await api("/api/v1/vcenters", {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+      }
+      setMsg(msg, "Saved", true);
+      await reload(out.id);
+    } catch (err) {
+      setMsg(msg, err.message, false);
+    }
+  });
+
+  form.querySelector('[data-action="cancel"]').addEventListener("click", () => {
+    if (form.id.value) {
+      const vc = vcenters.find(v => v.id === form.id.value);
+      if (vc) showVCView(vc);
+      else { ui = null; emptyDetail(); renderVCList(); }
+    } else {
+      ui = null;
+      emptyDetail();
+      renderVCList();
+    }
+  });
+
+  form.querySelector('[data-action="test"]').addEventListener("click", async () => {
+    const msg = form.querySelector('[data-msg="vc"]');
+    if (!form.id.value) {
+      setMsg(msg, "Save the vCenter first, then Test.", false);
+      return;
+    }
+    try {
+      const res = await api(`/api/v1/vcenters/${form.id.value}/test`, {
+        method: "POST",
+        body: JSON.stringify({
+          url: form.url.value.trim(),
+          username: form.username.value.trim(),
+          password: form.password.value,
+          datacenter: form.datacenter.value.trim(),
+          datastore: form.datastore.value.trim(),
+          insecure: form.insecure.checked,
+        }),
+      });
+      setMsg(msg, res.ok ? "Connection OK" : (res.error || "failed"), !!res.ok);
+    } catch (err) {
+      setMsg(msg, err.message, false);
+    }
+  });
+}
+
+async function reload(selectId) {
   [vcenters, mappings] = await Promise.all([
     api("/api/v1/vcenters"),
     api("/api/v1/mappings"),
   ]);
-  fillVCSelect();
-  renderMaps();
-  renderMap();
   await refreshStatus();
-  if (selection?.type === "vc") {
-    const vc = vcenters.find(v => v.id === selection.id);
-    if (vc) showVCDetail(vc);
-    else { selection = null; showDetailPlaceholder(); }
-  } else if (selection?.type === "uuid") {
-    const m = mappings.find(x => x.uuid === selection.id);
-    if (m) showUUIDDetail(m);
-    else { selection = null; showDetailPlaceholder(); }
+  const id = selectId || (ui && ui.id);
+  if (id) {
+    const vc = vcenters.find(v => v.id === id);
+    if (vc) showVCView(vc);
+    else {
+      ui = null;
+      renderVCList();
+      emptyDetail();
+    }
+  } else {
+    renderVCList();
+    if (!ui || ui.mode !== "create") emptyDetail();
   }
 }
 
-$("#btnNewVC").addEventListener("click", () => showVCForm(null));
-$("#btnFocusMap").addEventListener("click", () => {
-  $("#mapBlock").scrollIntoView({ behavior: "smooth", block: "start" });
-});
-$("#btnCancelVC").addEventListener("click", () => {
-  const form = $("#vcForm");
-  document.body.appendChild(form);
-  form.classList.add("hidden");
-  selection = null;
-  showDetailPlaceholder();
-  renderMap();
-});
+$("#btnAddVC").addEventListener("click", showCreateForm);
+$("#btnAddVC2").addEventListener("click", showCreateForm);
 
-$("#gatewayMap").addEventListener("click", (e) => {
-  const vcEl = e.target.closest("[data-vc]");
-  const uuidEl = e.target.closest("[data-uuid]");
-  if (vcEl) {
-    const vc = vcenters.find(v => v.id === vcEl.getAttribute("data-vc"));
-    if (vc) showVCDetail(vc);
-  }
-  if (uuidEl) {
-    const m = mappings.find(x => x.uuid === uuidEl.getAttribute("data-uuid"));
-    if (m) showUUIDDetail(m);
-  }
+$("#vcList").addEventListener("click", (e) => {
+  const id = e.target.closest("[data-select]")?.getAttribute("data-select");
+  if (!id) return;
+  const vc = vcenters.find(v => v.id === id);
+  if (vc) showVCView(vc);
 });
 
 $("#detailPane").addEventListener("click", async (e) => {
-  const edit = e.target.getAttribute("data-edit-vc");
-  const del = e.target.getAttribute("data-del-vc");
+  const edit = e.target.getAttribute("data-edit");
+  const del = e.target.getAttribute("data-delete");
   const unmap = e.target.getAttribute("data-unmap");
   if (edit) {
     const vc = vcenters.find(v => v.id === edit);
-    showVCForm(vc);
+    if (vc) showEditForm(vc);
   }
   if (del) {
-    if (!confirm("Delete this vCenter and its UUID mappings?")) return;
+    if (!confirm("Delete this vCenter and all UUID mappings under it?")) return;
     await api(`/api/v1/vcenters/${del}`, { method: "DELETE" });
-    selection = null;
-    showDetailPlaceholder();
+    ui = null;
     await reload();
   }
   if (unmap) {
     await api(`/api/v1/mappings/${encodeURIComponent(unmap)}`, { method: "DELETE" });
-    selection = null;
-    showDetailPlaceholder();
-    await reload();
+    await reload(ui?.id);
   }
 });
-
-$("#mapList").addEventListener("click", async (e) => {
-  const open = e.target.getAttribute("data-open-uuid") || e.target.closest("[data-open-uuid]")?.getAttribute("data-open-uuid");
-  const unmap = e.target.getAttribute("data-unmap");
-  if (unmap) {
-    await api(`/api/v1/mappings/${encodeURIComponent(unmap)}`, { method: "DELETE" });
-    await reload();
-    return;
-  }
-  if (open) {
-    const m = mappings.find(x => x.uuid === open);
-    if (m) {
-      showUUIDDetail(m);
-      $("#mapBlock").scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  }
-});
-
-$("#vcForm").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const f = e.target;
-  const body = {
-    name: f.name.value.trim(),
-    url: f.url.value.trim(),
-    username: f.username.value.trim(),
-    password: f.password.value,
-    datacenter: f.datacenter.value.trim(),
-    datastore: f.datastore.value.trim(),
-    isoFolder: f.isoFolder.value.trim() || "rf2vc/isos",
-    insecure: f.insecure.checked,
-    notes: f.notes.value.trim(),
-  };
-  try {
-    let out;
-    if (f.id.value) {
-      out = await api(`/api/v1/vcenters/${f.id.value}`, { method: "PUT", body: JSON.stringify(body) });
-    } else {
-      if (!body.password) throw new Error("password required for new vCenter");
-      out = await api("/api/v1/vcenters", { method: "POST", body: JSON.stringify(body) });
-    }
-    document.body.appendChild(f);
-    f.classList.add("hidden");
-    await reload();
-    const vc = vcenters.find(v => v.id === out.id) || out;
-    showVCDetail(vc);
-  } catch (err) {
-    setMsg($("#vcMsg"), err.message, false);
-  }
-});
-
-$("#btnTestVC").addEventListener("click", async () => {
-  const f = $("#vcForm");
-  if (!f.id.value) {
-    setMsg($("#vcMsg"), "Save the vCenter first, then Test.", false);
-    return;
-  }
-  const body = {
-    url: f.url.value.trim(),
-    username: f.username.value.trim(),
-    password: f.password.value,
-    datacenter: f.datacenter.value.trim(),
-    datastore: f.datastore.value.trim(),
-    insecure: f.insecure.checked,
-  };
-  try {
-    const res = await api(`/api/v1/vcenters/${f.id.value}/test`, { method: "POST", body: JSON.stringify(body) });
-    setMsg($("#vcMsg"), res.ok ? "Connection OK" : (res.error || "failed"), !!res.ok);
-  } catch (err) {
-    setMsg($("#vcMsg"), err.message, false);
-  }
-});
-
-$("#mapForm").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const f = e.target;
-  try {
-    const out = await api("/api/v1/mappings", {
-      method: "POST",
-      body: JSON.stringify({
-        uuid: f.uuid.value.trim(),
-        vcenterId: f.vcenterId.value,
-        name: f.name.value.trim(),
-        notes: f.notes.value.trim(),
-      }),
-    });
-    f.reset();
-    fillVCSelect();
-    setMsg($("#mapMsg"), "Mapped", true);
-    await reload();
-    showUUIDDetail(out);
-  } catch (err) {
-    setMsg($("#mapMsg"), err.message, false);
-  }
-});
-
-$("#mapFilter").addEventListener("input", renderMaps);
 
 reload().catch(err => {
   $("#statusLine").textContent = "API error: " + err.message;
