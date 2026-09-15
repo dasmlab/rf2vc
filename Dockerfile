@@ -1,7 +1,7 @@
 # Export-friendly image build (same as deployments/containers/Containerfile).
 # Prefer: buildah bud -f deployments/containers/Containerfile ...
 ARG BUILD_VERSION=dev
-FROM golang:1.22-bookworm AS go-builder
+FROM docker.io/library/golang:1.23-bookworm AS go-builder
 WORKDIR /app
 COPY go.mod go.sum* ./
 RUN go mod download
@@ -9,7 +9,7 @@ COPY cmd/ ./cmd/
 COPY internal/ ./internal/
 RUN CGO_ENABLED=0 go build -ldflags "-s -w -X main.buildVersion=${BUILD_VERSION}" -o /rf2vc ./cmd/gateway
 
-FROM debian:bookworm-slim
+FROM docker.io/library/debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/ \
     && useradd -u 65532 -r -s /usr/sbin/nologin appuser \
