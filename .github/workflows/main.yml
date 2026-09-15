@@ -96,12 +96,11 @@ jobs:
           set -euo pipefail
           cid="rf2vc-smoke-${GITHUB_SHA::8}"
           docker rm -f "${cid}" 2>/dev/null || true
-          # Prefer docker; fall back to podman for runtime
           RUNNER=docker
           command -v docker >/dev/null 2>&1 || RUNNER=podman
-          cfg="$(mktemp)"
+          cfgdir="$(mktemp -d)"
           datadir="$(mktemp -d)"
-          cat > "${cfg}" <<'EOF'
+          cat > "${cfgdir}/gateway.yaml" <<'EOF'
           listen: ":8080"
           auth:
             username: "redfish"
@@ -109,11 +108,12 @@ jobs:
           dataDir: "/data"
           isoCacheDir: "/data/iso-cache"
           EOF
+          ${RUNNER} pull "ghcr.io/dasmlab/rf2vc:${VERSION_TAG}"
           ${RUNNER} run -d --name "${cid}" \
-            -v "${cfg}:/etc/rf2vc/gateway.yaml:ro" \
+            -v "${cfgdir}:/etc/rf2vc:ro" \
             -v "${datadir}:/data" \
             "ghcr.io/dasmlab/rf2vc:${VERSION_TAG}"
-          trap '${RUNNER} rm -f "${cid}" 2>/dev/null || true; rm -f "${cfg}"; rm -rf "${datadir}"' EXIT
+          trap '${RUNNER} rm -f "${cid}" 2>/dev/null || true; rm -rf "${cfgdir}" "${datadir}"' EXIT
           for _ in $(seq 1 30); do
             if ${RUNNER} exec "${cid}" curl -fsS http://localhost:8080/healthz >/dev/null 2>&1; then
               ${RUNNER} exec "${cid}" curl -fsS -u redfish:smoke http://localhost:8080/api/v1/status

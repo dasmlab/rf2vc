@@ -14,7 +14,7 @@ resources:
 
 images:
   - name: ghcr.io/dasmlab/rf2vc
-    newTag: v2026.09.15-b0296de
+    newTag: v2026.09.15-0b40063
 
 commonLabels:
   app.kubernetes.io/name: rf2vc
