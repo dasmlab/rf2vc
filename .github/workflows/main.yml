@@ -3,7 +3,15 @@ name: rf2vc CX Pipeline
 on:
   push:
     branches: ["**"]
+    tags: ["v*.*.*"]
   workflow_dispatch:
+    inputs:
+      bump:
+        description: "SemVer bump on main (point every commit; minor/major when drawing a line)"
+        required: false
+        default: "point"
+        type: choice
+        options: [point, minor, major]
 
 env:
   RUNNER_LABEL: self-hosted
@@ -17,26 +25,73 @@ jobs:
     runs-on: [self-hosted]
     outputs:
       version_tag: ${{ steps.meta.outputs.version_tag }}
+      semver: ${{ steps.meta.outputs.semver }}
+      git_tag: ${{ steps.meta.outputs.git_tag }}
       is_prod: ${{ steps.meta.outputs.is_prod }}
+      create_git_tag: ${{ steps.meta.outputs.create_git_tag }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
       - id: meta
         run: |
           set -euo pipefail
+          chmod +x scripts/ci/resolve-version.sh
+
+          # Skip bot-only .localbuild bumps (avoid loops).
+          if git log -1 --pretty=%B | grep -qi '\[skip ci\]'; then
+            echo "Skipping: commit marked [skip ci]"
+            echo "version_tag=skip" >> "$GITHUB_OUTPUT"
+            echo "semver=skip" >> "$GITHUB_OUTPUT"
+            echo "git_tag=skip" >> "$GITHUB_OUTPUT"
+            echo "is_prod=false" >> "$GITHUB_OUTPUT"
+            echo "create_git_tag=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            echo "version_tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-            echo "is_prod=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "version_tag=v$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-            if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
-              echo "is_prod=true" >> "$GITHUB_OUTPUT"
-            else
+            # Explicit release tag (commitme / line in the sand).
+            SHA="$(git rev-parse --short HEAD)"
+            RAW="${GITHUB_REF_NAME#v}"
+            # Only plain vX.Y.Z (ignore accidental vX.Y.Z-sha tags)
+            if ! echo "${RAW}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "Ignoring non-semver tag ${GITHUB_REF_NAME}"
+              echo "version_tag=skip" >> "$GITHUB_OUTPUT"
+              echo "semver=skip" >> "$GITHUB_OUTPUT"
+              echo "git_tag=skip" >> "$GITHUB_OUTPUT"
               echo "is_prod=false" >> "$GITHUB_OUTPUT"
+              echo "create_git_tag=false" >> "$GITHUB_OUTPUT"
+              exit 0
             fi
+            echo "version_tag=v${RAW}-${SHA}" >> "$GITHUB_OUTPUT"
+            echo "semver=${RAW}" >> "$GITHUB_OUTPUT"
+            echo "git_tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "is_prod=true" >> "$GITHUB_OUTPUT"
+            echo "create_git_tag=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          IS_PROD=false
+          BUMP=0
+          if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            IS_PROD=true
+            BUMP=1
+          fi
+
+          BUMP_KIND="${{ github.event.inputs.bump || 'point' }}"
+          BUMP="${BUMP}" BUMP_KIND="${BUMP_KIND}" SHA="$(git rev-parse --short HEAD)" \
+            ./scripts/ci/resolve-version.sh
+
+          echo "is_prod=${IS_PROD}" >> "$GITHUB_OUTPUT"
+          # create_git_tag already set by resolve-version when bumping; force false off main
+          if [ "${IS_PROD}" != "true" ]; then
+            echo "create_git_tag=false" >> "$GITHUB_OUTPUT"
           fi
 
   test:
     needs: prepare
+    if: needs.prepare.outputs.version_tag != 'skip'
     runs-on: [self-hosted]
     steps:
       - uses: actions/checkout@v4
@@ -48,6 +103,7 @@ jobs:
 
   build-publish:
     needs: [prepare, test]
+    if: needs.prepare.outputs.version_tag != 'skip'
     runs-on: [self-hosted]
     permissions:
       contents: read
@@ -72,6 +128,7 @@ jobs:
       - name: Build and push image
         env:
           VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
+          IS_PROD: ${{ needs.prepare.outputs.is_prod }}
         run: |
           set -euo pipefail
           IMAGE="ghcr.io/dasmlab/rf2vc:${VERSION_TAG}"
@@ -83,7 +140,9 @@ jobs:
               -t "${IMAGE}" -t "${LATEST}" .
             echo "${GHCR_TOKEN}" | buildah login -u "${GHCR_USER}" --password-stdin ghcr.io
             buildah push "${IMAGE}"
-            buildah push "${LATEST}"
+            if [ "${IS_PROD}" = "true" ]; then
+              buildah push "${LATEST}"
+            fi
           else
             docker build \
               --build-arg BUILD_VERSION="${VERSION_TAG}" \
@@ -91,7 +150,9 @@ jobs:
               -t "${IMAGE}" -t "${LATEST}" .
             echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USER}" --password-stdin
             docker push "${IMAGE}"
-            docker push "${LATEST}"
+            if [ "${IS_PROD}" = "true" ]; then
+              docker push "${LATEST}"
+            fi
           fi
 
       - name: Smoke test
@@ -129,6 +190,43 @@ jobs:
           done
           ${RUNNER} logs "${cid}" || true
           exit 1
+
+  release-tag:
+    needs: [prepare, build-publish]
+    if: success() && needs.prepare.outputs.is_prod == 'true' && needs.prepare.outputs.create_git_tag == 'true'
+    runs-on: [self-hosted]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag SemVer + sync .localbuild
+        env:
+          SEMVER: ${{ needs.prepare.outputs.semver }}
+          GIT_TAG: ${{ needs.prepare.outputs.git_tag }}
+          VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "dasmlab-bot"
+          git config user.email "ci@dasmlab.org"
+
+          echo "${SEMVER}" > .localbuild
+          git add .localbuild
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: bump .localbuild to ${SEMVER} [skip ci]"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+
+          if git rev-parse "${GIT_TAG}" >/dev/null 2>&1; then
+            echo "Tag ${GIT_TAG} already exists"
+          else
+            git tag -a "${GIT_TAG}" -m "rf2vc ${GIT_TAG} (${VERSION_TAG})"
+            git push origin "${GIT_TAG}"
+          fi
+          echo "Released ${GIT_TAG} → ghcr.io/dasmlab/rf2vc:${VERSION_TAG} (+ latest)"
 
   gitops-deploy:
     needs: [prepare, build-publish]
@@ -200,7 +298,7 @@ jobs:
 
   preview-deploy:
     needs: [prepare, build-publish]
-    if: success() && needs.prepare.outputs.is_prod != 'true'
+    if: success() && needs.prepare.outputs.is_prod != 'true' && needs.prepare.outputs.version_tag != 'skip'
     runs-on: [self-hosted]
     steps:
       - uses: actions/checkout@v4

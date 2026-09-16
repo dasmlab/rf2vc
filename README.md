@@ -9,7 +9,7 @@ to the right inventory.
 | | |
 |---|---|
 | Source | https://github.com/dasmlab/rf2vc |
-| Image | `ghcr.io/dasmlab/rf2vc:v1.0.0` (public — no pull secret) |
+| Image | `ghcr.io/dasmlab/rf2vc:latest` / `vX.Y.Z-<sha>` (public — no pull secret) |
 | Docs | [Architecture](docs/ARCHITECTURE.md) · [OpenShift deploy](deploy/openshift/) |
 
 ```
@@ -77,6 +77,14 @@ make build && make run
 
 Sources are D2 under `diagrams/*.d2`. CI renders sibling SVGs (same pipeline as other
 dasmlab projects). Locally: `d2 diagrams/rf2vc-overview.d2 diagrams/rf2vc-overview.svg`
+
+## Versioning
+
+Every push to `main` auto-bumps **patch** SemVer (from git tags + `.localbuild`), publishes
+`ghcr.io/dasmlab/rf2vc:vX.Y.Z-<short-sha>` and `:latest`, then tags `vX.Y.Z`.
+
+- Draw a line: `workflow_dispatch` with bump `minor`/`major`, or commit message `[bump minor]` / `[bump major]`
+- Local helper: `./commitme.sh point|minor|major "message"` (same pattern as other dasmlab repos)
 
 ## Layout
 
