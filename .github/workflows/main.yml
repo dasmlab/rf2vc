@@ -3,7 +3,6 @@ name: rf2vc CX Pipeline
 on:
   push:
     branches: ["**"]
-    tags: ["v*.*.*"]
   workflow_dispatch:
     inputs:
       bump:
