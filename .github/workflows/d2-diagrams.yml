@@ -9,7 +9,7 @@ on:
 
 jobs:
   render-d2:
-    runs-on: [self-hosted]
+    runs-on: ubuntu-latest
     permissions:
       contents: write
 
