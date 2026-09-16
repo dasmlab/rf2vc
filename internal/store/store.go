@@ -22,6 +22,7 @@ type VCenter struct {
 	Insecure   bool   `json:"insecure"`
 	Datacenter string `json:"datacenter"`
 	Datastore  string `json:"datastore"`
+	Folder     string `json:"folder,omitempty"` // GOVC_FOLDER, e.g. /Montreal/vm/VMs/TDM/OpenShift/ACM/LAB
 	ISOFolder  string `json:"isoFolder"`
 	Notes      string `json:"notes,omitempty"`
 }
@@ -171,6 +172,7 @@ func (s *Store) SeedFromGOVC() (bool, error) {
 		Insecure:   insecure,
 		Datacenter: dc,
 		Datastore:  ds,
+		Folder:     strings.TrimSpace(os.Getenv("GOVC_FOLDER")),
 		ISOFolder:  iso,
 		Notes:      "auto-seeded from GOVC_* env on first boot",
 	}

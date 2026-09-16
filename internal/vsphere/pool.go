@@ -31,6 +31,7 @@ func (p *Pool) endpointFrom(vc store.VCenter) Endpoint {
 		Insecure:   vc.Insecure,
 		Datacenter: vc.Datacenter,
 		Datastore:  vc.Datastore,
+		Folder:     vc.Folder,
 		ISOFolder:  vc.ISOFolder,
 		ISOCache:   p.isoCache,
 	}
@@ -39,7 +40,7 @@ func (p *Pool) endpointFrom(vc store.VCenter) Endpoint {
 func sameEndpoint(a, b Endpoint) bool {
 	return a.URL == b.URL && a.Username == b.Username && a.Password == b.Password &&
 		a.Insecure == b.Insecure && a.Datacenter == b.Datacenter && a.Datastore == b.Datastore &&
-		a.ISOFolder == b.ISOFolder
+		a.Folder == b.Folder && a.ISOFolder == b.ISOFolder
 }
 
 func (p *Pool) For(vc store.VCenter) (*Client, error) {

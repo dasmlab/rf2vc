@@ -30,7 +30,7 @@ function setMsg(el, text, ok) {
 
 let vcenters = [];
 let mappings = [];
-/** @type {null | { mode: 'view'|'edit'|'create', id?: string }} */
+/** @type {null | { mode: 'view'|'edit'|'create', id?: string, tab?: 'uuids'|'iso' }} */
 let ui = null;
 
 function mappingsFor(vcId) {
@@ -83,9 +83,25 @@ function fillVCForm(form, vc) {
   form.password.value = "";
   form.datacenter.value = vc?.datacenter || "";
   form.datastore.value = vc?.datastore || "";
+  form.folder.value = vc?.folder || "";
   form.isoFolder.value = vc?.isoFolder || "rf2vc/isos";
   form.insecure.checked = !!vc?.insecure;
   form.notes.value = vc?.notes || "";
+}
+
+function formBody(form) {
+  return {
+    name: form.name.value.trim(),
+    url: form.url.value.trim(),
+    username: form.username.value.trim(),
+    password: form.password.value,
+    datacenter: form.datacenter.value.trim(),
+    datastore: form.datastore.value.trim(),
+    folder: form.folder.value.trim(),
+    isoFolder: form.isoFolder.value.trim() || "rf2vc/isos",
+    insecure: form.insecure.checked,
+    notes: form.notes.value.trim(),
+  };
 }
 
 function showCreateForm() {
@@ -122,22 +138,16 @@ function showEditForm(vc) {
   wireVCForm(form);
 }
 
+function lightHTML(tone, label) {
+  const t = tone || "red";
+  return `<span class="status-light" title="${escapeHtml(label || t)}"><span class="dot ${escapeHtml(t)}" aria-hidden="true"></span><span class="lbl">${escapeHtml(label || "")}</span></span>`;
+}
+
 function showVCView(vc) {
-  ui = { mode: "view", id: vc.id };
+  const tab = (ui && ui.id === vc.id && ui.tab) || "uuids";
+  ui = { mode: "view", id: vc.id, tab };
   renderVCList();
   const rows = mappingsFor(vc.id);
-  const uuidBlock = rows.length
-    ? rows.map(m => `
-        <div class="uuid-row">
-          <div>
-            <div class="title">${escapeHtml(m.name || "System")}</div>
-            <div class="meta">${escapeHtml(m.uuid)}</div>
-            ${m.notes ? `<div class="meta">${escapeHtml(m.notes)}</div>` : ""}
-            <div class="path">/redfish/v1/Systems/${escapeHtml(m.uuid)}</div>
-          </div>
-          <button type="button" class="pill danger sm" data-unmap="${escapeHtml(m.uuid)}">Remove</button>
-        </div>`).join("")
-    : `<div class="vc-empty">No UUIDs bound to this vCenter yet.</div>`;
 
   $("#detailBody").innerHTML = `
     <div class="detail-head">
@@ -146,28 +156,31 @@ function showVCView(vc) {
         <h2 class="detail-title">${escapeHtml(vc.name)}</h2>
         <p class="detail-meta">${escapeHtml(vc.url)}</p>
         <p class="detail-meta">${escapeHtml(vc.datacenter)} / ${escapeHtml(vc.datastore)} · ${escapeHtml(vc.username)}${vc.insecure ? " · insecure" : ""}</p>
+        ${vc.folder ? `<p class="detail-meta">Folder · ${escapeHtml(vc.folder)}</p>` : `<p class="detail-meta">Folder · <em>not set</em></p>`}
         <p class="detail-meta">ISO folder · ${escapeHtml(vc.isoFolder || "rf2vc/isos")}</p>
         ${vc.notes ? `<p class="detail-meta">${escapeHtml(vc.notes)}</p>` : ""}
+        <div class="health-row" id="healthRow">
+          ${lightHTML("yellow", "Connection…")}
+          ${lightHTML("yellow", "ISO cache…")}
+        </div>
+        <p class="detail-meta" id="healthDetail"></p>
+        <p class="msg" id="vcTestMsg"></p>
       </div>
       <div class="detail-actions">
+        <button type="button" class="pill ghost sm" data-test-vc="${vc.id}">Test</button>
+        <button type="button" class="pill ghost sm" data-refresh-health="${vc.id}">Refresh</button>
         <button type="button" class="pill ghost sm" data-edit="${vc.id}">Edit</button>
         <button type="button" class="pill danger sm" data-delete="${vc.id}">Delete</button>
       </div>
     </div>
 
-    <div class="section-block">
-      <div class="section-head">
-        <h3>ISO cache</h3>
-        <button type="button" class="pill ghost sm" data-refresh-iso="${vc.id}">Refresh</button>
-      </div>
-      <p class="detail-meta" id="isoSummary">Loading…</p>
-      <div class="iso-list" id="isoList"></div>
-      <p class="msg" id="isoMsg"></p>
+    <div class="tabs" role="tablist">
+      <button type="button" class="tab ${tab === "uuids" ? "active" : ""}" data-tab="uuids" role="tab">UUIDs (${rows.length})</button>
+      <button type="button" class="tab ${tab === "iso" ? "active" : ""}" data-tab="iso" role="tab">ISO cache</button>
     </div>
 
-    <div class="section-block">
-      <h3>UUID bindings (${rows.length})</h3>
-      <div class="uuid-list">${uuidBlock}</div>
+    <div class="tab-panel ${tab === "uuids" ? "" : "hidden"}" id="tabUuids">
+      <div class="uuid-list" id="uuidList"></div>
       <form class="bind-form" id="bindForm">
         <label>BIOS UUID <input name="uuid" required placeholder="4235a1b2-…" /></label>
         <label>Name <input name="name" placeholder="MO-OCLAB-CP01" /></label>
@@ -176,9 +189,22 @@ function showVCView(vc) {
       </form>
       <p class="msg" id="bindMsg"></p>
     </div>
+
+    <div class="tab-panel ${tab === "iso" ? "" : "hidden"}" id="tabIso">
+      <div class="section-head">
+        <h3>Staged ISOs</h3>
+        <button type="button" class="pill ghost sm" data-refresh-iso="${vc.id}">Refresh</button>
+      </div>
+      <p class="detail-meta" id="isoSummary">Loading…</p>
+      <div class="iso-list" id="isoList"></div>
+      <p class="msg" id="isoMsg"></p>
+    </div>
   `;
 
-  loadISOStatus(vc.id);
+  renderUUIDRows(vc, rows);
+  loadHealth(vc.id);
+  if (tab === "iso") loadISOStatus(vc.id);
+  else loadAllUUIDStatus(rows);
 
   $("#bindForm").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -199,6 +225,93 @@ function showVCView(vc) {
       setMsg($("#bindMsg"), err.message, false);
     }
   });
+}
+
+function renderUUIDRows(vc, rows) {
+  const list = $("#uuidList");
+  if (!list) return;
+  if (!rows.length) {
+    list.innerHTML = `<div class="vc-empty">No UUIDs bound to this vCenter yet.</div>`;
+    return;
+  }
+  list.innerHTML = rows.map(m => `
+    <div class="uuid-row" data-uuid-row="${escapeHtml(m.uuid)}">
+      <div class="uuid-main">
+        <div class="uuid-title-row">
+          <span class="status-light" data-light="${escapeHtml(m.uuid)}"><span class="dot yellow"></span></span>
+          <div class="title">${escapeHtml(m.name || "System")}</div>
+        </div>
+        <div class="meta">${escapeHtml(m.uuid)}</div>
+        ${m.notes ? `<div class="meta">${escapeHtml(m.notes)}</div>` : ""}
+        <div class="path">/redfish/v1/Systems/${escapeHtml(m.uuid)}</div>
+        <div class="meta" data-vm-path="${escapeHtml(m.uuid)}"></div>
+        <div class="meta" data-cdrom="${escapeHtml(m.uuid)}"></div>
+        <p class="msg" data-row-msg="${escapeHtml(m.uuid)}"></p>
+      </div>
+      <div class="uuid-actions">
+        <button type="button" class="pill ghost sm" data-uuid-status="${escapeHtml(m.uuid)}">Status</button>
+        <button type="button" class="pill ghost sm" data-uuid-on="${escapeHtml(m.uuid)}" disabled>Power on</button>
+        <button type="button" class="pill ghost sm" data-uuid-off="${escapeHtml(m.uuid)}" disabled>Power off</button>
+        <button type="button" class="pill ghost sm" data-uuid-iso="${escapeHtml(m.uuid)}">ISO map</button>
+        <button type="button" class="pill danger sm" data-unmap="${escapeHtml(m.uuid)}">Remove</button>
+      </div>
+    </div>`).join("");
+}
+
+function applyUUIDStatus(uuid, st) {
+  const light = document.querySelector(`[data-light="${CSS.escape(uuid)}"]`);
+  if (light) {
+    const tone = st.light || "red";
+    light.innerHTML = `<span class="dot ${escapeHtml(tone)}" title="${escapeHtml(st.powerState || st.error || tone)}"></span>`;
+  }
+  const pathEl = document.querySelector(`[data-vm-path="${CSS.escape(uuid)}"]`);
+  if (pathEl) {
+    pathEl.textContent = st.path ? `Path · ${st.path}` : (st.found ? "" : (st.error || "not found"));
+  }
+  const cdEl = document.querySelector(`[data-cdrom="${CSS.escape(uuid)}"]`);
+  if (cdEl && st.cdromIso !== undefined) {
+    cdEl.textContent = st.cdromIso ? `CDROM · ${st.cdromIso}` : (st.found ? "CDROM · (none / empty)" : "");
+  }
+  const onBtn = document.querySelector(`[data-uuid-on="${CSS.escape(uuid)}"]`);
+  const offBtn = document.querySelector(`[data-uuid-off="${CSS.escape(uuid)}"]`);
+  if (onBtn) onBtn.disabled = !(st.found && st.powerState === "Off");
+  if (offBtn) offBtn.disabled = !(st.found && st.powerState === "On");
+  const msg = document.querySelector(`[data-row-msg="${CSS.escape(uuid)}"]`);
+  if (msg && st.error && st.light === "yellow") setMsg(msg, st.error, false);
+  else if (msg) setMsg(msg, "", null);
+}
+
+async function loadUUIDStatus(uuid) {
+  try {
+    const st = await api(`/api/v1/mappings/${encodeURIComponent(uuid)}/status`);
+    applyUUIDStatus(uuid, st);
+    return st;
+  } catch (err) {
+    applyUUIDStatus(uuid, { light: "red", found: false, error: err.message });
+    return null;
+  }
+}
+
+async function loadAllUUIDStatus(rows) {
+  await Promise.all(rows.map(m => loadUUIDStatus(m.uuid)));
+}
+
+async function loadHealth(vcId) {
+  const row = $("#healthRow");
+  const detail = $("#healthDetail");
+  if (!row) return;
+  try {
+    const h = await api(`/api/v1/vcenters/${vcId}/health`);
+    row.innerHTML =
+      lightHTML(h.connection, "Connection") +
+      lightHTML(h.isoCache, "ISO cache");
+    if (detail) {
+      detail.textContent = [h.connectionDetail, h.isoCacheDetail].filter(Boolean).join(" · ");
+    }
+  } catch (err) {
+    row.innerHTML = lightHTML("red", "Connection") + lightHTML("red", "ISO cache");
+    if (detail) detail.textContent = err.message;
+  }
 }
 
 function formatBytes(n) {
@@ -254,17 +367,7 @@ async function loadISOStatus(vcId) {
 function wireVCForm(form) {
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const body = {
-      name: form.name.value.trim(),
-      url: form.url.value.trim(),
-      username: form.username.value.trim(),
-      password: form.password.value,
-      datacenter: form.datacenter.value.trim(),
-      datastore: form.datastore.value.trim(),
-      isoFolder: form.isoFolder.value.trim() || "rf2vc/isos",
-      insecure: form.insecure.checked,
-      notes: form.notes.value.trim(),
-    };
+    const body = formBody(form);
     const msg = form.querySelector('[data-msg="vc"]');
     try {
       let out;
@@ -301,22 +404,21 @@ function wireVCForm(form) {
 
   form.querySelector('[data-action="test"]').addEventListener("click", async () => {
     const msg = form.querySelector('[data-msg="vc"]');
-    if (!form.id.value) {
-      setMsg(msg, "Save the vCenter first, then Test.", false);
-      return;
-    }
+    const body = formBody(form);
     try {
-      const res = await api(`/api/v1/vcenters/${form.id.value}/test`, {
-        method: "POST",
-        body: JSON.stringify({
-          url: form.url.value.trim(),
-          username: form.username.value.trim(),
-          password: form.password.value,
-          datacenter: form.datacenter.value.trim(),
-          datastore: form.datastore.value.trim(),
-          insecure: form.insecure.checked,
-        }),
-      });
+      let res;
+      if (form.id.value) {
+        res = await api(`/api/v1/vcenters/${form.id.value}/test`, {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+      } else {
+        if (!body.password) throw new Error("password required to test a new vCenter");
+        res = await api("/api/v1/vcenters/test", {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+      }
       setMsg(msg, res.ok ? "Connection OK" : (res.error || "failed"), !!res.ok);
     } catch (err) {
       setMsg(msg, err.message, false);
@@ -356,10 +458,25 @@ $("#vcList").addEventListener("click", (e) => {
 });
 
 $("#detailPane").addEventListener("click", async (e) => {
+  const tab = e.target.getAttribute("data-tab");
+  if (tab && ui?.id) {
+    ui.tab = tab;
+    const vc = vcenters.find(v => v.id === ui.id);
+    if (vc) showVCView(vc);
+    return;
+  }
+
   const edit = e.target.getAttribute("data-edit");
   const del = e.target.getAttribute("data-delete");
   const unmap = e.target.getAttribute("data-unmap");
   const refreshIso = e.target.getAttribute("data-refresh-iso");
+  const refreshHealth = e.target.getAttribute("data-refresh-health");
+  const testVc = e.target.getAttribute("data-test-vc");
+  const uuidStatus = e.target.getAttribute("data-uuid-status");
+  const uuidOn = e.target.getAttribute("data-uuid-on");
+  const uuidOff = e.target.getAttribute("data-uuid-off");
+  const uuidIso = e.target.getAttribute("data-uuid-iso");
+
   if (edit) {
     const vc = vcenters.find(v => v.id === edit);
     if (vc) showEditForm(vc);
@@ -374,8 +491,55 @@ $("#detailPane").addEventListener("click", async (e) => {
     await api(`/api/v1/mappings/${encodeURIComponent(unmap)}`, { method: "DELETE" });
     await reload(ui?.id);
   }
-  if (refreshIso) {
-    await loadISOStatus(refreshIso);
+  if (refreshIso) await loadISOStatus(refreshIso);
+  if (refreshHealth) {
+    await loadHealth(refreshHealth);
+    const rows = mappingsFor(refreshHealth);
+    await loadAllUUIDStatus(rows);
+  }
+  if (testVc) {
+    const msg = $("#vcTestMsg");
+    try {
+      const res = await api(`/api/v1/vcenters/${testVc}/test`, { method: "POST", body: "{}" });
+      setMsg(msg, res.ok ? "Connection OK" : (res.error || "failed"), !!res.ok);
+      await loadHealth(testVc);
+    } catch (err) {
+      setMsg(msg, err.message, false);
+    }
+  }
+  if (uuidStatus) {
+    const st = await loadUUIDStatus(uuidStatus);
+    const msg = document.querySelector(`[data-row-msg="${CSS.escape(uuidStatus)}"]`);
+    if (st?.found) setMsg(msg, `${st.powerState || "?"} · ${st.name || ""}`, true);
+  }
+  if (uuidOn) {
+    try {
+      const res = await api(`/api/v1/mappings/${encodeURIComponent(uuidOn)}/power`, {
+        method: "POST",
+        body: JSON.stringify({ resetType: "On" }),
+      });
+      if (res.status) applyUUIDStatus(uuidOn, res.status);
+    } catch (err) {
+      setMsg(document.querySelector(`[data-row-msg="${CSS.escape(uuidOn)}"]`), err.message, false);
+    }
+  }
+  if (uuidOff) {
+    try {
+      const res = await api(`/api/v1/mappings/${encodeURIComponent(uuidOff)}/power`, {
+        method: "POST",
+        body: JSON.stringify({ resetType: "ForceOff" }),
+      });
+      if (res.status) applyUUIDStatus(uuidOff, res.status);
+    } catch (err) {
+      setMsg(document.querySelector(`[data-row-msg="${CSS.escape(uuidOff)}"]`), err.message, false);
+    }
+  }
+  if (uuidIso) {
+    const st = await loadUUIDStatus(uuidIso);
+    const msg = document.querySelector(`[data-row-msg="${CSS.escape(uuidIso)}"]`);
+    if (st?.cdromIso) setMsg(msg, `CDROM · ${st.cdromIso}`, true);
+    else if (st?.found) setMsg(msg, "CDROM empty / passthrough", true);
+    else setMsg(msg, st?.error || "unavailable", false);
   }
 });
 

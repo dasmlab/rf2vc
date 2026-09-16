@@ -41,11 +41,11 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	}
 	vc, mp := s.st.Stats()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"service":     "rf2vc",
-		"version":     s.version,
-		"vcenters":    vc,
-		"mappings":    mp,
-		"time":        time.Now().UTC().Format(time.RFC3339),
+		"service":  "rf2vc",
+		"version":  s.version,
+		"vcenters": vc,
+		"mappings": mp,
+		"time":     time.Now().UTC().Format(time.RFC3339),
 	})
 }
 
@@ -79,14 +79,24 @@ func (s *Server) vcenterItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	parts := strings.Split(path, "/")
-	id := parts[0]
 
+	// POST /api/v1/vcenters/test — unsaved form body (no id)
+	if len(parts) == 1 && parts[0] == "test" && r.Method == http.MethodPost {
+		s.testVCenterBody(w, r, store.VCenter{})
+		return
+	}
+
+	id := parts[0]
 	if len(parts) == 2 && parts[1] == "test" && r.Method == http.MethodPost {
 		s.testVCenter(w, r, id)
 		return
 	}
 	if len(parts) == 2 && parts[1] == "iso-status" && r.Method == http.MethodGet {
 		s.isoStatus(w, r, id)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "health" && r.Method == http.MethodGet {
+		s.vcHealth(w, r, id)
 		return
 	}
 	if len(parts) != 1 {
@@ -128,15 +138,7 @@ func (s *Server) vcenterItem(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) testVCenter(w http.ResponseWriter, r *http.Request, id string) {
-	vc, ok := s.st.GetVCenterSecret(id)
-	if !ok {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
-	// Optional body overrides for testing unsaved form values
-	var override store.VCenter
-	_ = json.NewDecoder(r.Body).Decode(&override)
+func applyVCOverrides(vc *store.VCenter, override store.VCenter) {
 	if override.URL != "" {
 		vc.URL = override.URL
 	}
@@ -152,15 +154,51 @@ func (s *Server) testVCenter(w http.ResponseWriter, r *http.Request, id string) 
 	if override.Datastore != "" {
 		vc.Datastore = override.Datastore
 	}
+	if override.Folder != "" {
+		vc.Folder = override.Folder
+	}
+	if override.ISOFolder != "" {
+		vc.ISOFolder = override.ISOFolder
+	}
 	vc.Insecure = vc.Insecure || override.Insecure
+}
 
-	ctx := r.Context()
+func (s *Server) testVCenter(w http.ResponseWriter, r *http.Request, id string) {
+	vc, ok := s.st.GetVCenterSecret(id)
+	if !ok {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	var override store.VCenter
+	_ = json.NewDecoder(r.Body).Decode(&override)
+	applyVCOverrides(&vc, override)
+	s.testVCenterBody(w, r, vc)
+}
+
+func (s *Server) testVCenterBody(w http.ResponseWriter, r *http.Request, vc store.VCenter) {
+	// If vc empty (unsaved test), decode full body.
+	if vc.URL == "" {
+		if err := json.NewDecoder(r.Body).Decode(&vc); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	if vc.URL == "" || vc.Username == "" || vc.Password == "" || vc.Datacenter == "" || vc.Datastore == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"ok":    false,
+			"error": "url, username, password, datacenter, and datastore are required to test",
+		})
+		return
+	}
+	if vc.ISOFolder == "" {
+		vc.ISOFolder = "rf2vc/isos"
+	}
 	ep := vsphere.Endpoint{
 		URL: vc.URL, Username: vc.Username, Password: vc.Password,
 		Insecure: vc.Insecure, Datacenter: vc.Datacenter, Datastore: vc.Datastore,
-		ISOFolder: vc.ISOFolder,
+		Folder: vc.Folder, ISOFolder: vc.ISOFolder,
 	}
-	if err := vsphere.TestConnection(ctx, ep); err != nil {
+	if err := vsphere.TestConnection(r.Context(), ep); err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
@@ -180,6 +218,20 @@ func (s *Server) isoStatus(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	st := c.ISOCacheStatus(r.Context())
 	writeJSON(w, http.StatusOK, st)
+}
+
+func (s *Server) vcHealth(w http.ResponseWriter, r *http.Request, id string) {
+	vc, ok := s.st.GetVCenterSecret(id)
+	if !ok {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	ep := vsphere.Endpoint{
+		URL: vc.URL, Username: vc.Username, Password: vc.Password,
+		Insecure: vc.Insecure, Datacenter: vc.Datacenter, Datastore: vc.Datastore,
+		Folder: vc.Folder, ISOFolder: vc.ISOFolder,
+	}
+	writeJSON(w, http.StatusOK, vsphere.ProbeHealth(r.Context(), ep))
 }
 
 func (s *Server) mappings(w http.ResponseWriter, r *http.Request) {
@@ -204,12 +256,28 @@ func (s *Server) mappings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) mappingItem(w http.ResponseWriter, r *http.Request) {
-	uuid := strings.TrimPrefix(r.URL.Path, "/api/v1/mappings/")
-	uuid = strings.Trim(uuid, "/")
-	if uuid == "" {
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/mappings/")
+	path = strings.Trim(path, "/")
+	if path == "" {
 		http.NotFound(w, r)
 		return
 	}
+	parts := strings.Split(path, "/")
+	uuid := parts[0]
+
+	if len(parts) == 2 && parts[1] == "status" && r.Method == http.MethodGet {
+		s.mappingStatus(w, r, uuid)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "power" && r.Method == http.MethodPost {
+		s.mappingPower(w, r, uuid)
+		return
+	}
+	if len(parts) != 1 {
+		http.NotFound(w, r)
+		return
+	}
+
 	switch r.Method {
 	case http.MethodPut:
 		var m store.Mapping
@@ -233,4 +301,44 @@ func (s *Server) mappingItem(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *Server) mappingStatus(w http.ResponseWriter, r *http.Request, uuid string) {
+	c, _, err := s.pool.ClientForUUID(s.st, uuid)
+	if err != nil {
+		writeJSON(w, http.StatusOK, vsphere.MappingStatus{
+			UUID:  uuid,
+			Found: false,
+			Light: vsphere.LightRed,
+			Error: err.Error(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, c.MappingStatus(r.Context(), uuid))
+}
+
+func (s *Server) mappingPower(w http.ResponseWriter, r *http.Request, uuid string) {
+	var body struct {
+		ResetType string `json:"resetType"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	rt := strings.TrimSpace(body.ResetType)
+	if rt != "On" && rt != "ForceOff" {
+		http.Error(w, `resetType must be "On" or "ForceOff"`, http.StatusBadRequest)
+		return
+	}
+	c, _, err := s.pool.ClientForUUID(s.st, uuid)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	if err := c.Reset(r.Context(), uuid, rt); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	st := c.MappingStatus(r.Context(), uuid)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "status": st})
 }

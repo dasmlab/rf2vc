@@ -30,6 +30,7 @@ type Endpoint struct {
 	Insecure   bool
 	Datacenter string
 	Datastore  string
+	Folder     string // GOVC_FOLDER inventory path
 	ISOFolder  string
 	ISOCache   string
 	Allowlist  []string
@@ -113,18 +114,6 @@ func (c *Client) Close(ctx context.Context) error {
 	c.dc = nil
 	c.ds = nil
 	return err
-}
-
-// TestConnection logs in and resolves datacenter/datastore, then logs out.
-func TestConnection(ctx context.Context, ep Endpoint) error {
-	c, err := NewClient(ep)
-	if err != nil {
-		return err
-	}
-	if err := c.ensure(ctx); err != nil {
-		return err
-	}
-	return c.Close(ctx)
 }
 
 type SystemInfo struct {
@@ -217,7 +206,42 @@ func (c *Client) findByUUID(ctx context.Context, uuid string) (*object.VirtualMa
 	if !ok {
 		return nil, fmt.Errorf("uuid %s is not a VirtualMachine", uuid)
 	}
+	if err := c.checkFolder(ctx, vm); err != nil {
+		return nil, err
+	}
 	return vm, nil
+}
+
+// normalizeInventoryPath lowercases and trims for folder compares.
+func normalizeInventoryPath(p string) string {
+	p = strings.TrimSpace(p)
+	p = strings.ReplaceAll(p, "\\", "/")
+	for strings.Contains(p, "//") {
+		p = strings.ReplaceAll(p, "//", "/")
+	}
+	return strings.ToLower(strings.TrimSuffix(p, "/"))
+}
+
+func (c *Client) checkFolder(ctx context.Context, vm *object.VirtualMachine) error {
+	folder := strings.TrimSpace(c.ep.Folder)
+	if folder == "" {
+		return nil
+	}
+	pathName := vm.InventoryPath
+	if pathName == "" {
+		p, err := find.InventoryPath(ctx, c.client.Client, vm.Reference())
+		if err != nil {
+			return fmt.Errorf("vm path: %w", err)
+		}
+		pathName = p
+		vm.SetInventoryPath(p)
+	}
+	want := normalizeInventoryPath(folder)
+	got := normalizeInventoryPath(pathName)
+	if got == want || strings.HasPrefix(got, want+"/") {
+		return nil
+	}
+	return fmt.Errorf("vm %s path %q is outside GOVC_FOLDER %q", vm.Name(), pathName, folder)
 }
 
 func (c *Client) Reset(ctx context.Context, uuid, resetType string) error {
