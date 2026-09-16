@@ -69,9 +69,13 @@ make build && make run
 - `GET|POST /api/v1/vcenters`
 - `GET|PUT|DELETE /api/v1/vcenters/{id}`
 - `POST /api/v1/vcenters/{id}/test`
+- `GET /api/v1/vcenters/{id}/health`
+- `GET /api/v1/vcenters/{id}/vms` — recursive VMs under Folder (GOVC_FOLDER)
 - `GET /api/v1/vcenters/{id}/iso-status`
 - `GET|POST /api/v1/mappings`
 - `PUT|DELETE /api/v1/mappings/{uuid}`
+- `GET /api/v1/mappings/{uuid}/status`
+- `POST /api/v1/mappings/{uuid}/power`
 
 ## Diagrams
 

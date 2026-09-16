@@ -15,3 +15,24 @@ func TestNormalizeInventoryPath(t *testing.T) {
 		}
 	}
 }
+
+func TestFolderPathCandidates(t *testing.T) {
+	got := folderPathCandidates("/Montreal/vm/VMs/TDM/OpenShift/ACM/")
+	if len(got) < 1 {
+		t.Fatalf("expected candidates, got %v", got)
+	}
+	if got[0] != "/Montreal/vm/VMs/TDM/OpenShift/ACM" {
+		t.Errorf("first=%q", got[0])
+	}
+	// Must include /vm/ normalization of /VMs/
+	wantAlt := "/Montreal/vm/vm/TDM/OpenShift/ACM"
+	found := false
+	for _, p := range got {
+		if p == wantAlt {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected alt %q in %v", wantAlt, got)
+	}
+}

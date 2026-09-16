@@ -147,7 +147,7 @@ function showVCView(vc) {
   const tab = (ui && ui.id === vc.id && ui.tab) || "uuids";
   ui = { mode: "view", id: vc.id, tab };
   renderVCList();
-  const rows = mappingsFor(vc.id);
+  const mapped = mappingsFor(vc.id);
 
   $("#detailBody").innerHTML = `
     <div class="detail-head">
@@ -156,7 +156,7 @@ function showVCView(vc) {
         <h2 class="detail-title">${escapeHtml(vc.name)}</h2>
         <p class="detail-meta">${escapeHtml(vc.url)}</p>
         <p class="detail-meta">${escapeHtml(vc.datacenter)} / ${escapeHtml(vc.datastore)} · ${escapeHtml(vc.username)}${vc.insecure ? " · insecure" : ""}</p>
-        ${vc.folder ? `<p class="detail-meta">Folder · ${escapeHtml(vc.folder)}</p>` : `<p class="detail-meta">Folder · <em>not set</em></p>`}
+        ${vc.folder ? `<p class="detail-meta">Folder · ${escapeHtml(vc.folder)} <span class="pill-tag">recursive</span></p>` : `<p class="detail-meta">Folder · <em>not set</em> (set GOVC_FOLDER to discover VMs)</p>`}
         <p class="detail-meta">ISO folder · ${escapeHtml(vc.isoFolder || "rf2vc/isos")}</p>
         ${vc.notes ? `<p class="detail-meta">${escapeHtml(vc.notes)}</p>` : ""}
         <div class="health-row" id="healthRow">
@@ -175,17 +175,18 @@ function showVCView(vc) {
     </div>
 
     <div class="tabs" role="tablist">
-      <button type="button" class="tab ${tab === "uuids" ? "active" : ""}" data-tab="uuids" role="tab">UUIDs (${rows.length})</button>
+      <button type="button" class="tab ${tab === "uuids" ? "active" : ""}" data-tab="uuids" role="tab">UUIDs <span id="uuidTabCount">(${mapped.length})</span></button>
       <button type="button" class="tab ${tab === "iso" ? "active" : ""}" data-tab="iso" role="tab">ISO cache</button>
     </div>
 
     <div class="tab-panel ${tab === "uuids" ? "" : "hidden"}" id="tabUuids">
+      <p class="detail-meta" id="folderVmSummary">Loading folder VMs…</p>
       <div class="uuid-list" id="uuidList"></div>
       <form class="bind-form" id="bindForm">
-        <label>BIOS UUID <input name="uuid" required placeholder="4235a1b2-…" /></label>
+        <label>BIOS UUID <input name="uuid" required placeholder="4235a1b2-… (add even if not listed)" /></label>
         <label>Name <input name="name" placeholder="MO-OCLAB-CP01" /></label>
         <label>Notes <input name="notes" /></label>
-        <button type="submit" class="pill primary">Bind UUID</button>
+        <button type="submit" class="pill primary">Add UUID</button>
       </form>
       <p class="msg" id="bindMsg"></p>
     </div>
@@ -201,10 +202,9 @@ function showVCView(vc) {
     </div>
   `;
 
-  renderUUIDRows(vc, rows);
   loadHealth(vc.id);
   if (tab === "iso") loadISOStatus(vc.id);
-  else loadAllUUIDStatus(rows);
+  else loadUUIDTab(vc);
 
   $("#bindForm").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -227,35 +227,112 @@ function showVCView(vc) {
   });
 }
 
+/** Merge folder inventory + persisted mappings for the UUIDs tab. */
+function mergeUUIDRows(mapped, discovered) {
+  const byUUID = new Map();
+  for (const vm of discovered || []) {
+    byUUID.set(vm.uuid, {
+      uuid: vm.uuid,
+      name: vm.name || "System",
+      notes: "",
+      path: vm.path || "",
+      powerState: vm.powerState || "",
+      light: vm.light || "yellow",
+      bound: false,
+      inFolder: true,
+    });
+  }
+  for (const m of mapped || []) {
+    const existing = byUUID.get(m.uuid);
+    if (existing) {
+      existing.bound = true;
+      existing.notes = m.notes || "";
+      if (m.name) existing.name = m.name;
+    } else {
+      byUUID.set(m.uuid, {
+        uuid: m.uuid,
+        name: m.name || "System",
+        notes: m.notes || "",
+        path: "",
+        powerState: "",
+        light: "yellow",
+        bound: true,
+        inFolder: false,
+      });
+    }
+  }
+  return Array.from(byUUID.values()).sort((a, b) =>
+    (a.name || a.uuid).localeCompare(b.name || b.uuid, undefined, { sensitivity: "base" })
+  );
+}
+
 function renderUUIDRows(vc, rows) {
   const list = $("#uuidList");
   if (!list) return;
   if (!rows.length) {
-    list.innerHTML = `<div class="vc-empty">No UUIDs bound to this vCenter yet.</div>`;
+    list.innerHTML = `<div class="vc-empty">No VMs in folder and no UUIDs bound yet.${vc.folder ? "" : "<br/>Set Folder (GOVC_FOLDER) or Add UUID below."}</div>`;
     return;
   }
-  list.innerHTML = rows.map(m => `
-    <div class="uuid-row" data-uuid-row="${escapeHtml(m.uuid)}">
-      <div class="uuid-main">
-        <div class="uuid-title-row">
-          <span class="status-light" data-light="${escapeHtml(m.uuid)}"><span class="dot yellow"></span></span>
-          <div class="title">${escapeHtml(m.name || "System")}</div>
-        </div>
-        <div class="meta">${escapeHtml(m.uuid)}</div>
-        ${m.notes ? `<div class="meta">${escapeHtml(m.notes)}</div>` : ""}
-        <div class="path">/redfish/v1/Systems/${escapeHtml(m.uuid)}</div>
-        <div class="meta" data-vm-path="${escapeHtml(m.uuid)}"></div>
-        <div class="meta" data-cdrom="${escapeHtml(m.uuid)}"></div>
-        <p class="msg" data-row-msg="${escapeHtml(m.uuid)}"></p>
-      </div>
-      <div class="uuid-actions">
+  list.innerHTML = rows.map(m => {
+    const tags = [];
+    if (m.inFolder) tags.push(`<span class="pill-tag">folder</span>`);
+    if (m.bound) tags.push(`<span class="pill-tag bound">bound</span>`);
+    else tags.push(`<span class="pill-tag unbound">not bound</span>`);
+    const actions = m.bound
+      ? `
         <button type="button" class="pill ghost sm" data-uuid-status="${escapeHtml(m.uuid)}">Status</button>
         <button type="button" class="pill ghost sm" data-uuid-on="${escapeHtml(m.uuid)}" disabled>Power on</button>
         <button type="button" class="pill ghost sm" data-uuid-off="${escapeHtml(m.uuid)}" disabled>Power off</button>
         <button type="button" class="pill ghost sm" data-uuid-iso="${escapeHtml(m.uuid)}">ISO map</button>
-        <button type="button" class="pill danger sm" data-unmap="${escapeHtml(m.uuid)}">Remove</button>
+        <button type="button" class="pill danger sm" data-unmap="${escapeHtml(m.uuid)}">Remove</button>`
+      : `
+        <button type="button" class="pill primary sm" data-bind-folder="${escapeHtml(m.uuid)}" data-bind-name="${escapeHtml(m.name)}">Bind</button>`;
+    return `
+    <div class="uuid-row" data-uuid-row="${escapeHtml(m.uuid)}">
+      <div class="uuid-main">
+        <div class="uuid-title-row">
+          <span class="status-light" data-light="${escapeHtml(m.uuid)}"><span class="dot ${escapeHtml(m.light || "yellow")}"></span></span>
+          <div class="title">${escapeHtml(m.name || "System")}</div>
+          <div class="uuid-tags">${tags.join(" ")}</div>
+        </div>
+        <div class="meta">${escapeHtml(m.uuid)}</div>
+        ${m.notes ? `<div class="meta">${escapeHtml(m.notes)}</div>` : ""}
+        <div class="path">/redfish/v1/Systems/${escapeHtml(m.uuid)}</div>
+        <div class="meta" data-vm-path="${escapeHtml(m.uuid)}">${m.path ? `Path · ${escapeHtml(m.path)}` : ""}</div>
+        <div class="meta" data-cdrom="${escapeHtml(m.uuid)}"></div>
+        <p class="msg" data-row-msg="${escapeHtml(m.uuid)}"></p>
       </div>
-    </div>`).join("");
+      <div class="uuid-actions">${actions}</div>
+    </div>`;
+  }).join("");
+}
+
+async function loadUUIDTab(vc) {
+  const summary = $("#folderVmSummary");
+  const mapped = mappingsFor(vc.id);
+  let discovered = [];
+  let folderMsg = "";
+  if (!vc.folder) {
+    folderMsg = "Folder not set — showing bound UUIDs only. Set GOVC_FOLDER to discover VMs under that path (recursive).";
+  } else {
+    if (summary) summary.textContent = `Scanning ${vc.folder} (recursive)…`;
+    try {
+      const res = await api(`/api/v1/vcenters/${vc.id}/vms`);
+      discovered = res.vms || [];
+      folderMsg = res.error
+        ? `Folder scan failed: ${res.error}`
+        : `Folder · ${discovered.length} VM(s) under ${vc.folder} (includes subfolders) · ${mapped.length} bound`;
+    } catch (err) {
+      folderMsg = `Folder scan failed: ${err.message}`;
+    }
+  }
+  if (summary) summary.textContent = folderMsg;
+  const rows = mergeUUIDRows(mapped, discovered);
+  const countEl = $("#uuidTabCount");
+  if (countEl) countEl.textContent = `(${rows.length})`;
+  renderUUIDRows(vc, rows);
+  // Live status for bound rows; discovered-only already have light from inventory.
+  await Promise.all(rows.filter(r => r.bound).map(r => loadUUIDStatus(r.uuid)));
 }
 
 function applyUUIDStatus(uuid, st) {
@@ -293,7 +370,7 @@ async function loadUUIDStatus(uuid) {
 }
 
 async function loadAllUUIDStatus(rows) {
-  await Promise.all(rows.map(m => loadUUIDStatus(m.uuid)));
+  await Promise.all((rows || []).map(m => loadUUIDStatus(m.uuid)));
 }
 
 async function loadHealth(vcId) {
@@ -476,6 +553,8 @@ $("#detailPane").addEventListener("click", async (e) => {
   const uuidOn = e.target.getAttribute("data-uuid-on");
   const uuidOff = e.target.getAttribute("data-uuid-off");
   const uuidIso = e.target.getAttribute("data-uuid-iso");
+  const bindFolder = e.target.getAttribute("data-bind-folder");
+  const bindName = e.target.getAttribute("data-bind-name");
 
   if (edit) {
     const vc = vcenters.find(v => v.id === edit);
@@ -491,11 +570,26 @@ $("#detailPane").addEventListener("click", async (e) => {
     await api(`/api/v1/mappings/${encodeURIComponent(unmap)}`, { method: "DELETE" });
     await reload(ui?.id);
   }
+  if (bindFolder && ui?.id) {
+    try {
+      await api("/api/v1/mappings", {
+        method: "POST",
+        body: JSON.stringify({
+          uuid: bindFolder,
+          vcenterId: ui.id,
+          name: bindName || "",
+        }),
+      });
+      await reload(ui.id);
+    } catch (err) {
+      setMsg(document.querySelector(`[data-row-msg="${CSS.escape(bindFolder)}"]`), err.message, false);
+    }
+  }
   if (refreshIso) await loadISOStatus(refreshIso);
   if (refreshHealth) {
     await loadHealth(refreshHealth);
-    const rows = mappingsFor(refreshHealth);
-    await loadAllUUIDStatus(rows);
+    const vc = vcenters.find(v => v.id === refreshHealth);
+    if (vc) await loadUUIDTab(vc);
   }
   if (testVc) {
     const msg = $("#vcTestMsg");
@@ -503,6 +597,8 @@ $("#detailPane").addEventListener("click", async (e) => {
       const res = await api(`/api/v1/vcenters/${testVc}/test`, { method: "POST", body: "{}" });
       setMsg(msg, res.ok ? "Connection OK" : (res.error || "failed"), !!res.ok);
       await loadHealth(testVc);
+      const vc = vcenters.find(v => v.id === testVc);
+      if (vc) await loadUUIDTab(vc);
     } catch (err) {
       setMsg(msg, err.message, false);
     }

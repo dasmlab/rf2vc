@@ -99,6 +99,10 @@ func (s *Server) vcenterItem(w http.ResponseWriter, r *http.Request) {
 		s.vcHealth(w, r, id)
 		return
 	}
+	if len(parts) == 2 && parts[1] == "vms" && r.Method == http.MethodGet {
+		s.vcFolderVMs(w, r, id)
+		return
+	}
 	if len(parts) != 1 {
 		http.NotFound(w, r)
 		return
@@ -232,6 +236,50 @@ func (s *Server) vcHealth(w http.ResponseWriter, r *http.Request, id string) {
 		Folder: vc.Folder, ISOFolder: vc.ISOFolder,
 	}
 	writeJSON(w, http.StatusOK, vsphere.ProbeHealth(r.Context(), ep))
+}
+
+func (s *Server) vcFolderVMs(w http.ResponseWriter, r *http.Request, id string) {
+	vc, ok := s.st.GetVCenterSecret(id)
+	if !ok {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if strings.TrimSpace(vc.Folder) == "" {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"folder":    "",
+			"recursive": true,
+			"vms":       []any{},
+			"count":     0,
+			"message":   "set Folder (GOVC_FOLDER) to discover VMs",
+		})
+		return
+	}
+	c, err := s.pool.For(vc)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	vms, err := c.ListFolderVMs(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{
+			"folder":  vc.Folder,
+			"ok":      false,
+			"error":   err.Error(),
+			"vms":     []any{},
+			"count":   0,
+		})
+		return
+	}
+	if vms == nil {
+		vms = []vsphere.FolderVM{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"folder":    vc.Folder,
+		"recursive": true,
+		"vms":       vms,
+		"count":     len(vms),
+		"ok":        true,
+	})
 }
 
 func (s *Server) mappings(w http.ResponseWriter, r *http.Request) {

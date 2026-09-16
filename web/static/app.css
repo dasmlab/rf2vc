@@ -356,6 +356,39 @@ body {
   font-weight: 700;
   color: var(--dasm-ink);
 }
+.uuid-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.55rem;
+}
+.uuid-tags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+.pill-tag {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--dasm-border-soft);
+  color: var(--dasm-text-muted);
+  background: var(--dasm-surface-2);
+}
+.pill-tag.bound {
+  color: var(--dasm-primary-dark);
+  border-color: var(--dasm-border-strong);
+  background: rgba(47, 143, 125, 0.12);
+}
+.pill-tag.unbound {
+  color: #8a6d3b;
+  border-color: rgba(138, 109, 59, 0.35);
+  background: rgba(212, 167, 74, 0.12);
+}
 .uuid-row .meta {
   color: var(--dasm-text-muted);
   font-size: 0.85rem;
