@@ -30,6 +30,9 @@ func (c *Client) datastoreFileExists(ctx context.Context, dsPath string) (bool, 
 	if err := c.ensure(ctx); err != nil {
 		return false, 0, err
 	}
+	if err := c.requireDatastore(); err != nil {
+		return false, 0, err
+	}
 	info, err := c.ds.Stat(ctx, dsPath)
 	if err != nil {
 		if _, ok := err.(object.DatastoreNoSuchFileError); ok {
@@ -82,6 +85,9 @@ func fileInfoName(info types.BaseFileInfo) string {
 
 func (c *Client) ensureISOFolder(ctx context.Context) error {
 	if err := c.ensure(ctx); err != nil {
+		return err
+	}
+	if err := c.requireDatastore(); err != nil {
 		return err
 	}
 	folder := strings.Trim(c.ep.ISOFolder, "/")
@@ -162,6 +168,15 @@ func (c *Client) ISOCacheStatus(ctx context.Context) ISOCacheStatus {
 
 	if err := c.ensure(ctx); err != nil {
 		out.Error = err.Error()
+		for _, e := range localByName {
+			e.DatastorePath = path.Join(c.ep.ISOFolder, e.Name)
+			out.Files = append(out.Files, e)
+		}
+		return out
+	}
+	if err := c.requireDatastore(); err != nil {
+		out.Error = err.Error()
+		out.Reachable = true // login OK; ISO path unavailable without DS
 		for _, e := range localByName {
 			e.DatastorePath = path.Join(c.ep.ISOFolder, e.Name)
 			out.Files = append(out.Files, e)

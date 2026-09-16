@@ -142,14 +142,26 @@ func newID() string {
 	return hex.EncodeToString(b[:])
 }
 
+// normalizeDatastore clears placeholders like NONE / notset so they are not
+// treated as real vSphere datastore names.
+func normalizeDatastore(s string) string {
+	s = strings.TrimSpace(s)
+	switch strings.ToLower(s) {
+	case "", "none", "notset", "not set", "n/a", "na", "-", "null", "undefined":
+		return ""
+	default:
+		return s
+	}
+}
+
 // SeedFromGOVC creates one vCenter when store is empty and GOVC_* env is set.
 func (s *Store) SeedFromGOVC() (bool, error) {
 	url := strings.TrimSpace(os.Getenv("GOVC_URL"))
 	user := strings.TrimSpace(os.Getenv("GOVC_USERNAME"))
 	pass := os.Getenv("GOVC_PASSWORD")
 	dc := strings.TrimSpace(os.Getenv("GOVC_DATACENTER"))
-	ds := strings.TrimSpace(os.Getenv("GOVC_DATASTORE"))
-	if url == "" || user == "" || pass == "" || dc == "" || ds == "" {
+	ds := normalizeDatastore(os.Getenv("GOVC_DATASTORE"))
+	if url == "" || user == "" || pass == "" || dc == "" {
 		return false, nil
 	}
 	s.mu.Lock()
@@ -208,19 +220,25 @@ func (s *Store) GetVCenterSecret(id string) (VCenter, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	vc, ok := s.vcenters[id]
-	return vc, ok
+	if !ok {
+		return VCenter{}, false
+	}
+	vc.Datastore = normalizeDatastore(vc.Datastore)
+	return vc, true
 }
 
 func redact(vc VCenter) VCenter {
 	vc.Password = ""
+	vc.Datastore = normalizeDatastore(vc.Datastore)
 	return vc
 }
 
 func (s *Store) UpsertVCenter(vc VCenter) (VCenter, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if vc.URL == "" || vc.Username == "" || vc.Datacenter == "" || vc.Datastore == "" {
-		return VCenter{}, fmt.Errorf("url, username, datacenter, datastore are required")
+	vc.Datastore = normalizeDatastore(vc.Datastore)
+	if vc.URL == "" || vc.Username == "" || vc.Datacenter == "" {
+		return VCenter{}, fmt.Errorf("url, username, and datacenter are required")
 	}
 	if vc.Name == "" {
 		vc.Name = vc.URL

@@ -28,6 +28,44 @@ function setMsg(el, text, ok) {
   el.className = "msg " + (ok === true ? "ok" : ok === false ? "err" : "");
 }
 
+function dsLabel(ds) {
+  const s = String(ds || "").trim();
+  if (!s || /^(none|notset|not set|n\/a|na|-)$/i.test(s)) return "datastore not set";
+  return s;
+}
+
+function showTestModal(res) {
+  const modal = $("#testModal");
+  const summary = $("#testModalSummary");
+  const list = $("#testModalChecks");
+  if (!modal || !summary || !list) return;
+  const ok = !!res?.ok;
+  summary.textContent = ok
+    ? "All required checks passed."
+    : (res?.error || "One or more checks failed.");
+  summary.className = "detail-meta " + (ok ? "msg ok" : "msg err");
+  const checks = res?.checks || [];
+  list.innerHTML = checks.length
+    ? checks.map(ch => {
+        const tone = ch.skip ? "skip" : (ch.ok ? "ok" : "err");
+        const mark = ch.skip ? "—" : (ch.ok ? "✓" : "✗");
+        return `<li class="check-row ${tone}"><span class="mark">${mark}</span><span class="name">${escapeHtml(ch.name)}</span><span class="detail">${escapeHtml(ch.detail || "")}</span></li>`;
+      }).join("")
+    : `<li class="check-row err"><span class="mark">✗</span><span class="name">Test</span><span class="detail">${escapeHtml(res?.error || "no result")}</span></li>`;
+  modal.classList.remove("hidden");
+}
+
+function hideTestModal() {
+  $("#testModal")?.classList.add("hidden");
+}
+
+document.addEventListener("click", (e) => {
+  if (e.target.closest("[data-close-test-modal]")) hideTestModal();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") hideTestModal();
+});
+
 let vcenters = [];
 let mappings = [];
 /** @type {null | { mode: 'view'|'edit'|'create', id?: string, tab?: 'uuids'|'iso' }} */
@@ -56,7 +94,7 @@ function renderVCList() {
       <button type="button" class="vc-item ${active ? "active" : ""}" data-select="${vc.id}">
         <div class="name">${escapeHtml(vc.name)}</div>
         <p class="meta">${escapeHtml(vc.url)}</p>
-        <p class="meta">${escapeHtml(vc.datacenter)} / ${escapeHtml(vc.datastore)}</p>
+        <p class="meta">${escapeHtml(vc.datacenter)} / ${escapeHtml(dsLabel(vc.datastore))}</p>
         <span class="count">${n} UUID${n === 1 ? "" : "s"}</span>
       </button>`;
   }).join("");
@@ -82,7 +120,7 @@ function fillVCForm(form, vc) {
   form.username.value = vc?.username || "";
   form.password.value = "";
   form.datacenter.value = vc?.datacenter || "";
-  form.datastore.value = vc?.datastore || "";
+  form.datastore.value = (vc?.datastore && !/^(none|notset)$/i.test(vc.datastore)) ? vc.datastore : "";
   form.folder.value = vc?.folder || "";
   form.isoFolder.value = vc?.isoFolder || "rf2vc/isos";
   form.insecure.checked = !!vc?.insecure;
@@ -155,7 +193,7 @@ function showVCView(vc) {
         <p class="caps">vCenter</p>
         <h2 class="detail-title">${escapeHtml(vc.name)}</h2>
         <p class="detail-meta">${escapeHtml(vc.url)}</p>
-        <p class="detail-meta">${escapeHtml(vc.datacenter)} / ${escapeHtml(vc.datastore)} · ${escapeHtml(vc.username)}${vc.insecure ? " · insecure" : ""}</p>
+        <p class="detail-meta">${escapeHtml(vc.datacenter)} / ${escapeHtml(dsLabel(vc.datastore))} · ${escapeHtml(vc.username)}${vc.insecure ? " · insecure" : ""}</p>
         ${vc.folder ? `<p class="detail-meta">Folder · ${escapeHtml(vc.folder)} <span class="pill-tag">recursive</span></p>` : `<p class="detail-meta">Folder · <em>not set</em> (set GOVC_FOLDER to discover VMs)</p>`}
         <p class="detail-meta">ISO folder · ${escapeHtml(vc.isoFolder || "rf2vc/isos")}</p>
         ${vc.notes ? `<p class="detail-meta">${escapeHtml(vc.notes)}</p>` : ""}
@@ -482,6 +520,7 @@ function wireVCForm(form) {
   form.querySelector('[data-action="test"]').addEventListener("click", async () => {
     const msg = form.querySelector('[data-msg="vc"]');
     const body = formBody(form);
+    setMsg(msg, "Testing…", null);
     try {
       let res;
       if (form.id.value) {
@@ -496,8 +535,10 @@ function wireVCForm(form) {
           body: JSON.stringify(body),
         });
       }
-      setMsg(msg, res.ok ? "Connection OK" : (res.error || "failed"), !!res.ok);
+      showTestModal(res);
+      setMsg(msg, res.ok ? "Connection OK — see checklist" : (res.error || "failed — see checklist"), !!res.ok);
     } catch (err) {
+      showTestModal({ ok: false, error: err.message, checks: [] });
       setMsg(msg, err.message, false);
     }
   });
@@ -593,13 +634,16 @@ $("#detailPane").addEventListener("click", async (e) => {
   }
   if (testVc) {
     const msg = $("#vcTestMsg");
+    setMsg(msg, "Testing…", null);
     try {
       const res = await api(`/api/v1/vcenters/${testVc}/test`, { method: "POST", body: "{}" });
-      setMsg(msg, res.ok ? "Connection OK" : (res.error || "failed"), !!res.ok);
+      showTestModal(res);
+      setMsg(msg, res.ok ? "Connection OK — see checklist" : (res.error || "failed — see checklist"), !!res.ok);
       await loadHealth(testVc);
       const vc = vcenters.find(v => v.id === testVc);
       if (vc) await loadUUIDTab(vc);
     } catch (err) {
+      showTestModal({ ok: false, error: err.message, checks: [] });
       setMsg(msg, err.message, false);
     }
   }

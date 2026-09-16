@@ -47,6 +47,18 @@ type Client struct {
 	mediaISO map[string]string
 }
 
+// NormalizeDatastore treats placeholders (NONE, notset, n/a, -) as unset.
+// Folder listing and UUID lookup work without a datastore; ISO staging does not.
+func NormalizeDatastore(s string) string {
+	s = strings.TrimSpace(s)
+	switch strings.ToLower(s) {
+	case "", "none", "notset", "not set", "n/a", "na", "-", "null", "undefined":
+		return ""
+	default:
+		return s
+	}
+}
+
 func NewClient(ep Endpoint) (*Client, error) {
 	if ep.ISOCache == "" {
 		ep.ISOCache = "/var/tmp/rf2vc"
@@ -54,6 +66,7 @@ func NewClient(ep Endpoint) (*Client, error) {
 	if ep.ISOFolder == "" {
 		ep.ISOFolder = "rf2vc/isos"
 	}
+	ep.Datastore = NormalizeDatastore(ep.Datastore)
 	if err := os.MkdirAll(ep.ISOCache, 0o755); err != nil {
 		return nil, err
 	}
@@ -89,16 +102,27 @@ func (c *Client) ensure(ctx context.Context) error {
 	}
 	finder.SetDatacenter(dc)
 
-	ds, err := finder.Datastore(ctx, c.ep.Datastore)
-	if err != nil {
-		_ = client.Logout(ctx)
-		return fmt.Errorf("datastore %q: %w", c.ep.Datastore, err)
+	var ds *object.Datastore
+	if name := NormalizeDatastore(c.ep.Datastore); name != "" {
+		ds, err = finder.Datastore(ctx, name)
+		if err != nil {
+			_ = client.Logout(ctx)
+			return fmt.Errorf("datastore %q: %w", name, err)
+		}
+		c.ep.Datastore = name
 	}
 
 	c.client = client
 	c.finder = finder
 	c.dc = dc
 	c.ds = ds
+	return nil
+}
+
+func (c *Client) requireDatastore() error {
+	if c.ds == nil || NormalizeDatastore(c.ep.Datastore) == "" {
+		return fmt.Errorf("datastore not set (needed for ISO cache; folder/UUID ops do not require it)")
+	}
 	return nil
 }
 

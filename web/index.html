@@ -60,7 +60,7 @@
       <label>Password <input name="password" type="password" placeholder="required for new / leave blank to keep" autocomplete="new-password" /></label>
       <div class="row2">
         <label>Datacenter <input name="datacenter" required placeholder="Montreal" /></label>
-        <label>Datastore <input name="datastore" required /></label>
+        <label>Datastore <input name="datastore" placeholder="real DS name (not NONE) — needed for ISO" /></label>
       </div>
       <label>VM folder (GOVC_FOLDER) <input name="folder" placeholder="/Montreal/vm/VMs/TDM/OpenShift/ACM/LAB" /></label>
       <label>ISO folder <input name="isoFolder" placeholder="rf2vc/isos" /></label>
@@ -74,6 +74,18 @@
       <p class="msg" data-msg="vc"></p>
     </form>
   </template>
+
+  <div id="testModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="testModalTitle">
+    <div class="modal-backdrop" data-close-test-modal></div>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2 id="testModalTitle">Connection test</h2>
+        <button type="button" class="pill ghost sm" data-close-test-modal>Close</button>
+      </div>
+      <p class="detail-meta" id="testModalSummary"></p>
+      <ul class="check-list" id="testModalChecks"></ul>
+    </div>
+  </div>
 
   <script src="/static/app.js"></script>
 </body>

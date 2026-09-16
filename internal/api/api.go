@@ -156,7 +156,7 @@ func applyVCOverrides(vc *store.VCenter, override store.VCenter) {
 		vc.Datacenter = override.Datacenter
 	}
 	if override.Datastore != "" {
-		vc.Datastore = override.Datastore
+		vc.Datastore = vsphere.NormalizeDatastore(override.Datastore)
 	}
 	if override.Folder != "" {
 		vc.Folder = override.Folder
@@ -187,10 +187,14 @@ func (s *Server) testVCenterBody(w http.ResponseWriter, r *http.Request, vc stor
 			return
 		}
 	}
-	if vc.URL == "" || vc.Username == "" || vc.Password == "" || vc.Datacenter == "" || vc.Datastore == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"ok":    false,
-			"error": "url, username, password, datacenter, and datastore are required to test",
+	vc.Datastore = vsphere.NormalizeDatastore(vc.Datastore)
+	if vc.URL == "" || vc.Username == "" || vc.Password == "" || vc.Datacenter == "" {
+		writeJSON(w, http.StatusOK, vsphere.ConnectionTest{
+			OK:    false,
+			Error: "url, username, password, and datacenter are required to test",
+			Checks: []vsphere.CheckResult{
+				{Name: "Login", OK: false, Detail: "missing required fields"},
+			},
 		})
 		return
 	}
@@ -202,11 +206,8 @@ func (s *Server) testVCenterBody(w http.ResponseWriter, r *http.Request, vc stor
 		Insecure: vc.Insecure, Datacenter: vc.Datacenter, Datastore: vc.Datastore,
 		Folder: vc.Folder, ISOFolder: vc.ISOFolder,
 	}
-	if err := vsphere.TestConnection(r.Context(), ep); err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	// Always 200 with structured checklist — failures are not HTTP/infra errors.
+	writeJSON(w, http.StatusOK, vsphere.RunConnectionTest(r.Context(), ep))
 }
 
 func (s *Server) isoStatus(w http.ResponseWriter, r *http.Request, id string) {
