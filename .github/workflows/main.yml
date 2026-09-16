@@ -23,11 +23,16 @@ jobs:
       - id: meta
         run: |
           set -euo pipefail
-          echo "version_tag=v$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-          if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "version_tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
             echo "is_prod=true" >> "$GITHUB_OUTPUT"
           else
-            echo "is_prod=false" >> "$GITHUB_OUTPUT"
+            echo "version_tag=v$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+            if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+              echo "is_prod=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "is_prod=false" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
   test:

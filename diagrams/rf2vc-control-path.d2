@@ -1,0 +1,34 @@
+direction: right
+
+acm: {
+  label: "ACM / Ironic"
+  style.fill: "#EEF1F8"
+}
+gw: {
+  label: "rf2vc gateway"
+  style.fill: "#1f6f62"
+  style.font-color: "#FFFFFF"
+  style.bold: true
+}
+map: {
+  label: "UUID → vCenter map\n(PVC state.json)"
+  style.fill: "#E8F2F0"
+}
+vc: {
+  label: "vCenter + creds"
+  style.fill: "#EEF1F8"
+}
+vm: {
+  label: "VM by BIOS UUID"
+  style.fill: "#EEF1F8"
+}
+act: {
+  label: "Power / Media / Boot"
+  style.fill: "#EEF1F8"
+}
+
+acm -> gw: "Basic Auth\nPOST /Systems/{uuid}"
+gw -> map: "extract UUID"
+map -> vc: "endpoint + secret"
+vc -> vm: "FindByUuid"
+vm -> act: "govmomi"

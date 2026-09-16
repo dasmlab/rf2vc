@@ -1,0 +1,19 @@
+direction: right
+
+acm: {
+  label: "ACM / BMH"
+  style.fill: "#EEF1F8"
+}
+rf2vc: {
+  label: "rf2vc"
+  style.fill: "#1f6f62"
+  style.font-color: "#FFFFFF"
+  style.bold: true
+}
+vsphere: {
+  label: "vSphere VM"
+  style.fill: "#EEF1F8"
+}
+
+acm -> rf2vc: "Redfish\n/Systems/{UUID}"
+rf2vc -> vsphere: "govmomi\npower · ISO · boot"

@@ -4,43 +4,45 @@ Public **Redfish BMC facade** in front of one or more **vCenters**, with a UUID�
 map so ACM/MCE BareMetalHost (`redfish-virtualmedia://.../Systems/<BIOS-UUID>`) routes
 to the right inventory.
 
+![rf2vc overview](diagrams/rf2vc-overview.svg)
+
 | | |
 |---|---|
 | Source | https://github.com/dasmlab/rf2vc |
-| Image | `ghcr.io/dasmlab/rf2vc:<tag>` (public — no pull secret) |
+| Image | `ghcr.io/dasmlab/rf2vc:v1.0.0` (public — no pull secret) |
+| Docs | [Architecture](docs/ARCHITECTURE.md) · [OpenShift deploy](deploy/openshift/) |
 
 ```
 Admin UI ──► /data/state.json (PVC) ──► in-memory map
 BMH/Ironic ──Redfish──► rf2vc ──govmomi──► vCenter A / B / …
 ```
 
+## How it works
+
+**Control path** — ACM posts Redfish actions against `/redfish/v1/Systems/{UUID}`. rf2vc
+looks up the UUID, selects the mapped vCenter credentials, finds the VM by BIOS UUID,
+then applies power / boot / virtual-media via govmomi.
+
+**ISO path** — `imageSetRef` stays in ACM/Assisted. Ironic sends an ISO URL in
+`InsertMedia`; rf2vc hashes it, reuses or uploads to the datastore, and attaches CDROM.
+
+Details + scorecard: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**
+
+![control path](diagrams/rf2vc-control-path.svg)
+
 ## Deploy on OpenShift
 
 ```bash
-# 1) Auth secret (required)
+git clone https://github.com/dasmlab/rf2vc.git && cd rf2vc
+git checkout v1.0.0
+
 export RF2VC_AUTH_PASSWORD='pick-a-strong-password'
 ./scripts/bootstrap-secrets.sh
 
-# 2) Optional: set image tag / PVC storageClass / route host
-#    edit deploy/openshift/kustomization.yaml (images.newTag)
-#    edit deploy/openshift/pvc.yaml if you need a specific StorageClass
-#    edit deploy/openshift/route.yaml to set an explicit host
-
-# 3) Apply
+# optional: StorageClass in deploy/openshift/pvc.yaml ; route host auto-assigned if unset
 oc apply -k deploy/openshift/
 
-# 4) Watch
 oc -n rf2vc-system get pods,route
-oc -n rf2vc-system get route rf2vc -o jsonpath='{.spec.host}{"\n"}'
-```
-
-Or apply the example secret from the template:
-
-```bash
-cp deploy/openshift/secret.example.yaml /tmp/rf2vc-secret.yaml
-# edit auth-password
-oc apply -f /tmp/rf2vc-secret.yaml
-oc apply -k deploy/openshift/
 ```
 
 BMH example (replace host + secret):
@@ -61,17 +63,6 @@ make build && make run
 # UI: http://127.0.0.1:8080/  (basic auth)
 ```
 
-Optional first-boot seed:
-
-```bash
-export GOVC_URL=https://vcenter.example
-export GOVC_USERNAME=...
-export GOVC_PASSWORD=...
-export GOVC_DATACENTER=...
-export GOVC_DATASTORE=...
-export GOVC_INSECURE=1
-```
-
 ## API (basic auth)
 
 - `GET /api/v1/status`
@@ -82,15 +73,22 @@ export GOVC_INSECURE=1
 - `GET|POST /api/v1/mappings`
 - `PUT|DELETE /api/v1/mappings/{uuid}`
 
+## Diagrams
+
+Sources are D2 under `diagrams/*.d2`. CI renders sibling SVGs (same pipeline as other
+dasmlab projects). Locally: `d2 diagrams/rf2vc-overview.d2 diagrams/rf2vc-overview.svg`
+
 ## Layout
 
 ```
 cmd/gateway/           main + auth mux
-internal/store/        PVC JSON + in-memory UUID/vCenter indexes
-internal/vsphere/      per-VC client + pool
+internal/store/        PVC JSON + UUID/vCenter indexes
+internal/vsphere/      per-VC client + ISO cache
 internal/redfish/      Redfish surface (map-routed)
 internal/api/          management REST
-web/                   embedded admin UI (go:embed)
+web/                   embedded admin UI
 deploy/openshift/      portable OCP manifests (kustomize)
-k8s_envelope/          dasmlab GitOps envelope + Argo Application
+diagrams/              D2 sources + rendered SVGs
+docs/                  architecture notes
+k8s_envelope/          dasmlab GitOps envelope
 ```

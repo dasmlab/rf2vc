@@ -1,0 +1,39 @@
+direction: down
+
+aci: {
+  label: "AgentClusterInstall\nimageSetRef"
+  style.fill: "#EEF1F8"
+}
+cis: {
+  label: "ClusterImageSet\nOCP release pullspec"
+  style.fill: "#EEF1F8"
+}
+infra: {
+  label: "InfraEnv / image-service\nbootable ISO URL"
+  style.fill: "#EEF1F8"
+}
+ironic: {
+  label: "Ironic / BMO\nInsertMedia.Image"
+  style.fill: "#EEF1F8"
+}
+rf: {
+  label: "rf2vc InsertMedia"
+  style.fill: "#1f6f62"
+  style.font-color: "#FFFFFF"
+  style.bold: true
+}
+ds: {
+  label: "Datastore ISO cache\nhash(url) → reuse or UploadFile"
+  style.fill: "#E8F2F0"
+}
+cd: {
+  label: "Attach CDROM + boot once"
+  style.fill: "#EEF1F8"
+}
+
+aci -> cis: "names"
+cis -> infra: "release → ISO"
+infra -> ironic: "isoDownloadURL"
+ironic -> rf: "POST InsertMedia"
+rf -> ds: "Stat / upload"
+ds -> cd: "VirtualCdromIsoBacking"
