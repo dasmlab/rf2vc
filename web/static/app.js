@@ -316,6 +316,7 @@ function renderUUIDRows(vc, rows) {
     if (m.inFolder) tags.push(`<span class="pill-tag">folder</span>`);
     if (m.bound) tags.push(`<span class="pill-tag bound">bound</span>`);
     else tags.push(`<span class="pill-tag unbound">not bound</span>`);
+    const shortUuid = m.uuid.length > 13 ? `${m.uuid.slice(0, 8)}…` : m.uuid;
     const actions = m.bound
       ? `
         <button type="button" class="pill ghost sm" data-uuid-status="${escapeHtml(m.uuid)}">Status</button>
@@ -327,20 +328,25 @@ function renderUUIDRows(vc, rows) {
         <button type="button" class="pill primary sm" data-bind-folder="${escapeHtml(m.uuid)}" data-bind-name="${escapeHtml(m.name)}">Bind</button>`;
     return `
     <div class="uuid-row" data-uuid-row="${escapeHtml(m.uuid)}">
-      <div class="uuid-main">
-        <div class="uuid-title-row">
-          <span class="status-light" data-light="${escapeHtml(m.uuid)}"><span class="dot ${escapeHtml(m.light || "yellow")}"></span></span>
-          <div class="title">${escapeHtml(m.name || "System")}</div>
-          <div class="uuid-tags">${tags.join(" ")}</div>
+      <button type="button" class="uuid-summary" data-toggle-uuid="${escapeHtml(m.uuid)}" aria-expanded="false">
+        <span class="chev" aria-hidden="true"></span>
+        <span class="status-light" data-light="${escapeHtml(m.uuid)}"><span class="dot ${escapeHtml(m.light || "yellow")}"></span></span>
+        <span class="title">${escapeHtml(m.name || "System")}</span>
+        <span class="uuid-tags">${tags.join("")}</span>
+        <span class="uuid-short" title="${escapeHtml(m.uuid)}">${escapeHtml(shortUuid)}</span>
+      </button>
+      <div class="uuid-actions">${m.bound ? "" : actions}</div>
+      <div class="uuid-details hidden" data-uuid-details="${escapeHtml(m.uuid)}">
+        <div class="detail-grid">
+          <span class="k">BIOS UUID</span><code class="v">${escapeHtml(m.uuid)}</code>
+          <span class="k">Redfish</span><code class="v">/redfish/v1/Systems/${escapeHtml(m.uuid)}</code>
+          <span class="k">Path</span><span class="v" data-vm-path="${escapeHtml(m.uuid)}">${m.path ? escapeHtml(m.path) : "—"}</span>
+          ${m.notes ? `<span class="k">Notes</span><span class="v">${escapeHtml(m.notes)}</span>` : ""}
+          <span class="k">CDROM</span><span class="v" data-cdrom="${escapeHtml(m.uuid)}">—</span>
         </div>
-        <div class="meta">${escapeHtml(m.uuid)}</div>
-        ${m.notes ? `<div class="meta">${escapeHtml(m.notes)}</div>` : ""}
-        <div class="path">/redfish/v1/Systems/${escapeHtml(m.uuid)}</div>
-        <div class="meta" data-vm-path="${escapeHtml(m.uuid)}">${m.path ? `Path · ${escapeHtml(m.path)}` : ""}</div>
-        <div class="meta" data-cdrom="${escapeHtml(m.uuid)}"></div>
+        ${m.bound ? `<div class="uuid-actions expanded">${actions}</div>` : ""}
         <p class="msg" data-row-msg="${escapeHtml(m.uuid)}"></p>
       </div>
-      <div class="uuid-actions">${actions}</div>
     </div>`;
   }).join("");
 }
@@ -381,11 +387,11 @@ function applyUUIDStatus(uuid, st) {
   }
   const pathEl = document.querySelector(`[data-vm-path="${CSS.escape(uuid)}"]`);
   if (pathEl) {
-    pathEl.textContent = st.path ? `Path · ${st.path}` : (st.found ? "" : (st.error || "not found"));
+    pathEl.textContent = st.path || (st.found ? "—" : (st.error || "not found"));
   }
   const cdEl = document.querySelector(`[data-cdrom="${CSS.escape(uuid)}"]`);
   if (cdEl && st.cdromIso !== undefined) {
-    cdEl.textContent = st.cdromIso ? `CDROM · ${st.cdromIso}` : (st.found ? "CDROM · (none / empty)" : "");
+    cdEl.textContent = st.cdromIso ? st.cdromIso : (st.found ? "(none / empty)" : "—");
   }
   const onBtn = document.querySelector(`[data-uuid-on="${CSS.escape(uuid)}"]`);
   const offBtn = document.querySelector(`[data-uuid-off="${CSS.escape(uuid)}"]`);
@@ -421,7 +427,13 @@ async function loadHealth(vcId) {
       lightHTML(h.connection, "Connection") +
       lightHTML(h.isoCache, "ISO cache");
     if (detail) {
-      detail.textContent = [h.connectionDetail, h.isoCacheDetail].filter(Boolean).join(" · ");
+      const parts = [h.connectionDetail, h.isoCacheDetail].filter(Boolean);
+      // Avoid "datastore not set · datastore not set …" when both lines overlap.
+      const uniq = [];
+      for (const p of parts) {
+        if (!uniq.some(u => u.includes(p) || p.includes(u.split(" · ").pop()))) uniq.push(p);
+      }
+      detail.textContent = uniq.join(" · ");
     }
   } catch (err) {
     row.innerHTML = lightHTML("red", "Connection") + lightHTML("red", "ISO cache");
@@ -581,6 +593,19 @@ $("#detailPane").addEventListener("click", async (e) => {
     ui.tab = tab;
     const vc = vcenters.find(v => v.id === ui.id);
     if (vc) showVCView(vc);
+    return;
+  }
+
+  const toggleUuid = e.target.closest("[data-toggle-uuid]")?.getAttribute("data-toggle-uuid");
+  if (toggleUuid) {
+    const row = document.querySelector(`[data-uuid-row="${CSS.escape(toggleUuid)}"]`);
+    const details = document.querySelector(`[data-uuid-details="${CSS.escape(toggleUuid)}"]`);
+    const btn = e.target.closest("[data-toggle-uuid]");
+    if (row && details && btn) {
+      const open = details.classList.toggle("hidden") === false;
+      row.classList.toggle("open", open);
+      btn.setAttribute("aria-expanded", open ? "true" : "false");
+    }
     return;
   }
 
