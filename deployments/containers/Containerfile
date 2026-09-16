@@ -34,8 +34,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -u 65532 -r -s /usr/sbin/nologin appuser \
-    && mkdir -p /data/iso-cache \
+    && mkdir -p /data/iso-cache /etc/rf2vc \
     && chown -R 65532:65532 /data
+
+# Baked default for smoke/local; cluster ConfigMap overlays /etc/rf2vc.
+COPY configs/gateway.smoke.yaml /etc/rf2vc/gateway.yaml
 
 USER 65532
 

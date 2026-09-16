@@ -1,0 +1,8 @@
+# Default in-image config for CI smoke / local container runs.
+# OpenShift ConfigMap mounts over /etc/rf2vc and replaces this in cluster.
+listen: ":8080"
+auth:
+  username: "redfish"
+  password: "smoke"
+dataDir: "/data"
+isoCacheDir: "/data/iso-cache"

@@ -236,30 +236,11 @@ jobs:
           RUNNER=docker
           command -v docker >/dev/null 2>&1 || RUNNER=podman
 
-          # Image runs as UID 65532 and expects -config. Avoid /etc bind mounts
-          # (often invisible to rootless/SELinux on self-hosted); put smoke
-          # config on the /data volume and override CMD.
-          datadir="$(mktemp -d)"
-          chmod 0777 "${datadir}"
-          # Write config without Actions-YAML indentation (nested keys matter).
-          printf '%s\n' \
-            'listen: ":8080"' \
-            'auth:' \
-            '  username: "redfish"' \
-            '  password: "smoke"' \
-            'dataDir: "/data"' \
-            'isoCacheDir: "/data/iso-cache"' \
-            > "${datadir}/gateway.yaml"
-          chmod 0644 "${datadir}/gateway.yaml"
-          mkdir -p "${datadir}/iso-cache"
-          chmod 0777 "${datadir}/iso-cache"
-
+          # No bind mounts — self-hosted rootless/SELinux often hides them.
+          # Image ships configs/gateway.smoke.yaml at /etc/rf2vc/gateway.yaml.
           ${RUNNER} pull "ghcr.io/dasmlab/rf2vc:${VERSION_TAG}"
-          ${RUNNER} run -d --name "${cid}" \
-            -v "${datadir}:/data:Z" \
-            "ghcr.io/dasmlab/rf2vc:${VERSION_TAG}" \
-            -config /data/gateway.yaml
-          trap '${RUNNER} rm -f "${cid}" 2>/dev/null || true; rm -rf "${datadir}"' EXIT
+          ${RUNNER} run -d --name "${cid}" "ghcr.io/dasmlab/rf2vc:${VERSION_TAG}"
+          trap '${RUNNER} rm -f "${cid}" 2>/dev/null || true' EXIT
 
           for _ in $(seq 1 30); do
             if ${RUNNER} exec "${cid}" curl -fsS http://localhost:8080/healthz >/dev/null 2>&1; then
@@ -267,7 +248,6 @@ jobs:
               ${RUNNER} exec "${cid}" curl -fsS -u redfish:smoke http://localhost:8080/redfish/v1/
               exit 0
             fi
-            # Surface boot errors early (missing config, bad yaml, etc.)
             if ! ${RUNNER} inspect -f '{{.State.Running}}' "${cid}" 2>/dev/null | grep -qi true; then
               echo "container exited early:"
               ${RUNNER} logs "${cid}" || true
