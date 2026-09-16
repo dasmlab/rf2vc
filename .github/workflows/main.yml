@@ -128,31 +128,52 @@ jobs:
       - name: Build and push image
         env:
           VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
+          SEMVER: ${{ needs.prepare.outputs.semver }}
+          GIT_TAG: ${{ needs.prepare.outputs.git_tag }}
           IS_PROD: ${{ needs.prepare.outputs.is_prod }}
         run: |
           set -euo pipefail
-          IMAGE="ghcr.io/dasmlab/rf2vc:${VERSION_TAG}"
-          LATEST="ghcr.io/dasmlab/rf2vc:latest"
+          # Always: immutable build id  →  vX.Y.Z-<sha>
+          # On main: also floating      →  vX.Y.Z  and  latest
+          REPO="ghcr.io/dasmlab/rf2vc"
+          IMAGE_SHA="${REPO}:${VERSION_TAG}"
+          IMAGE_SEMVER="${REPO}:${GIT_TAG}"
+          IMAGE_PLAIN="${REPO}:${SEMVER}"
+          IMAGE_LATEST="${REPO}:latest"
+
+          TAG_ARGS=(-t "${IMAGE_SHA}")
+          if [ "${IS_PROD}" = "true" ]; then
+            TAG_ARGS+=(-t "${IMAGE_SEMVER}" -t "${IMAGE_PLAIN}" -t "${IMAGE_LATEST}")
+          fi
+
           if command -v buildah >/dev/null 2>&1; then
             buildah bud \
               --build-arg BUILD_VERSION="${VERSION_TAG}" \
               -f deployments/containers/Containerfile \
-              -t "${IMAGE}" -t "${LATEST}" .
+              "${TAG_ARGS[@]}" .
             echo "${GHCR_TOKEN}" | buildah login -u "${GHCR_USER}" --password-stdin ghcr.io
-            buildah push "${IMAGE}"
+            buildah push "${IMAGE_SHA}"
             if [ "${IS_PROD}" = "true" ]; then
-              buildah push "${LATEST}"
+              buildah push "${IMAGE_SEMVER}"
+              buildah push "${IMAGE_PLAIN}"
+              buildah push "${IMAGE_LATEST}"
             fi
           else
             docker build \
               --build-arg BUILD_VERSION="${VERSION_TAG}" \
               -f deployments/containers/Containerfile \
-              -t "${IMAGE}" -t "${LATEST}" .
+              "${TAG_ARGS[@]}" .
             echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USER}" --password-stdin
-            docker push "${IMAGE}"
+            docker push "${IMAGE_SHA}"
             if [ "${IS_PROD}" = "true" ]; then
-              docker push "${LATEST}"
+              docker push "${IMAGE_SEMVER}"
+              docker push "${IMAGE_PLAIN}"
+              docker push "${IMAGE_LATEST}"
             fi
+          fi
+          echo "Published ${IMAGE_SHA}"
+          if [ "${IS_PROD}" = "true" ]; then
+            echo "Also: ${IMAGE_SEMVER} ${IMAGE_PLAIN} ${IMAGE_LATEST}"
           fi
 
       - name: Smoke test
@@ -226,7 +247,7 @@ jobs:
             git tag -a "${GIT_TAG}" -m "rf2vc ${GIT_TAG} (${VERSION_TAG})"
             git push origin "${GIT_TAG}"
           fi
-          echo "Released ${GIT_TAG} → ghcr.io/dasmlab/rf2vc:${VERSION_TAG} (+ latest)"
+          echo "Released ${GIT_TAG} → ghcr.io/dasmlab/rf2vc:{${VERSION_TAG},${GIT_TAG},${SEMVER},latest}"
 
   gitops-deploy:
     needs: [prepare, build-publish]

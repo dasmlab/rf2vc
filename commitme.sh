@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Commit + SemVer tag (point|minor|major), same pattern as dasmlab_home / rh-*.
-# Updates .localbuild and pushes branch + tag. CI then builds vX.Y.Z-<sha> + latest.
+# Updates .localbuild and pushes branch + tag. CI then builds vX.Y.Z-<sha>, vX.Y.Z, X.Y.Z, latest.
 set -euo pipefail
 trap 'echo "Script failed at line $LINENO: $BASH_COMMAND"' ERR
 

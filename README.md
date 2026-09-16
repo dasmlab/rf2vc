@@ -9,7 +9,7 @@ to the right inventory.
 | | |
 |---|---|
 | Source | https://github.com/dasmlab/rf2vc |
-| Image | `ghcr.io/dasmlab/rf2vc:latest` / `vX.Y.Z-<sha>` (public — no pull secret) |
+| Image | `ghcr.io/dasmlab/rf2vc:latest` · `vX.Y.Z` · `X.Y.Z` · `vX.Y.Z-<sha>` (public) |
 | Docs | [Architecture](docs/ARCHITECTURE.md) · [OpenShift deploy](deploy/openshift/) |
 
 ```
@@ -80,8 +80,15 @@ dasmlab projects). Locally: `d2 diagrams/rf2vc-overview.d2 diagrams/rf2vc-overvi
 
 ## Versioning
 
-Every push to `main` auto-bumps **patch** SemVer (from git tags + `.localbuild`), publishes
-`ghcr.io/dasmlab/rf2vc:vX.Y.Z-<short-sha>` and `:latest`, then tags `vX.Y.Z`.
+Every push to `main` auto-bumps **patch** SemVer (from git tags + `.localbuild`) and publishes:
+
+| Tag | Purpose |
+|---|---|
+| `latest` | floating tip of main |
+| `vX.Y.Z` / `X.Y.Z` | floating tip of that SemVer |
+| `vX.Y.Z-<sha>` | immutable build id (GitOps uses this) |
+
+Then creates git tag `vX.Y.Z`.
 
 - Draw a line: `workflow_dispatch` with bump `minor`/`major`, or commit message `[bump minor]` / `[bump major]`
 - Local helper: `./commitme.sh point|minor|major "message"` (same pattern as other dasmlab repos)

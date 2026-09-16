@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Resolve SemVer for CX builds.
 # Source of truth: git tags vX.Y.Z (or X.Y.Z), with .localbuild as a floor.
-# On main (BUMP=1): bump point|minor|major → image tag vX.Y.Z-<sha> (+ latest).
+# On main (BUMP=1): bump point|minor|major → publish vX.Y.Z-<sha>, vX.Y.Z, X.Y.Z, latest.
 # If HEAD is already an exact vX.Y.Z tag (e.g. commitme.sh), use it (no bump).
-# On branches: no bump; emit vX.Y.Z-<sha> from current base.
+# On branches: no bump; emit only vX.Y.Z-<sha> from current base.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
