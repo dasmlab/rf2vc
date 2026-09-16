@@ -23,6 +23,8 @@ concurrency:
 jobs:
   prepare:
     runs-on: [self-hosted]
+    permissions:
+      contents: write
     outputs:
       version_tag: ${{ steps.meta.outputs.version_tag }}
       semver: ${{ steps.meta.outputs.semver }}
@@ -34,6 +36,7 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+          token: ${{ secrets.GITHUB_TOKEN }}
       - id: meta
         run: |
           set -euo pipefail
@@ -89,6 +92,35 @@ jobs:
             echo "create_git_tag=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # Claim SemVer immediately so the next main commit bumps past this one.
+      # (Previously tagged only after build — slow/failed runs left every build at 1.0.1.)
+      - name: Claim SemVer tag
+        if: steps.meta.outputs.is_prod == 'true' && steps.meta.outputs.create_git_tag == 'true' && steps.meta.outputs.version_tag != 'skip'
+        env:
+          SEMVER: ${{ steps.meta.outputs.semver }}
+          GIT_TAG: ${{ steps.meta.outputs.git_tag }}
+          VERSION_TAG: ${{ steps.meta.outputs.version_tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "dasmlab-bot"
+          git config user.email "ci@dasmlab.org"
+          git fetch --tags origin
+
+          echo "${SEMVER}" > .localbuild
+          git add .localbuild
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: bump .localbuild to ${SEMVER} [skip ci]"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+
+          if git rev-parse "refs/tags/${GIT_TAG}" >/dev/null 2>&1; then
+            echo "Tag ${GIT_TAG} already exists"
+          else
+            git tag -a "${GIT_TAG}" -m "rf2vc ${GIT_TAG} (${VERSION_TAG})"
+            git push origin "${GIT_TAG}"
+          fi
+          echo "Claimed ${GIT_TAG} for ${VERSION_TAG}"
+
   test:
     needs: prepare
     if: needs.prepare.outputs.version_tag != 'skip'
@@ -98,6 +130,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23"
+          cache: false
       - name: Go test
         run: go test ./...
 
@@ -212,43 +245,6 @@ jobs:
           ${RUNNER} logs "${cid}" || true
           exit 1
 
-  release-tag:
-    needs: [prepare, build-publish]
-    if: success() && needs.prepare.outputs.is_prod == 'true' && needs.prepare.outputs.create_git_tag == 'true'
-    runs-on: [self-hosted]
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Tag SemVer + sync .localbuild
-        env:
-          SEMVER: ${{ needs.prepare.outputs.semver }}
-          GIT_TAG: ${{ needs.prepare.outputs.git_tag }}
-          VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
-        run: |
-          set -euo pipefail
-          git config user.name "dasmlab-bot"
-          git config user.email "ci@dasmlab.org"
-
-          echo "${SEMVER}" > .localbuild
-          git add .localbuild
-          if ! git diff --cached --quiet; then
-            git commit -m "chore: bump .localbuild to ${SEMVER} [skip ci]"
-            git push origin "HEAD:${GITHUB_REF_NAME}"
-          fi
-
-          if git rev-parse "${GIT_TAG}" >/dev/null 2>&1; then
-            echo "Tag ${GIT_TAG} already exists"
-          else
-            git tag -a "${GIT_TAG}" -m "rf2vc ${GIT_TAG} (${VERSION_TAG})"
-            git push origin "${GIT_TAG}"
-          fi
-          echo "Released ${GIT_TAG} → ghcr.io/dasmlab/rf2vc:{${VERSION_TAG},${GIT_TAG},${SEMVER},latest}"
-
   gitops-deploy:
     needs: [prepare, build-publish]
     if: success() && needs.prepare.outputs.is_prod == 'true'
@@ -259,6 +255,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23"
+          cache: false
 
       - name: Ensure prod HAProxy cert
         continue-on-error: true
@@ -327,6 +324,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23"
+          cache: false
 
       - name: Deploy developer preview
         env:
