@@ -283,21 +283,25 @@ jobs:
       - name: GitOps sync
         env:
           VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
+          DASMLAB_GHCR_PAT: ${{ secrets.DASMLAB_GHCR_PAT }}
         run: |
           set -euo pipefail
           DEPLOY_TOKEN=""
-          if [ -f "/home/dasm/gh_token" ]; then
-            DEPLOY_TOKEN="$(tr -d '\n\r' < /home/dasm/gh_token)"
+          for f in /home/dasm/gh_token /home/dasm/gh-pat "$HOME/gh_token" "$HOME/gh-pat"; do
+            if [ -f "$f" ]; then
+              # shellcheck disable=SC1090
+              case "$f" in
+                *gh-pat) source "$f"; DEPLOY_TOKEN="${DASMLAB_GHCR_PAT:-${GH_TOKEN:-}}" ;;
+                *) DEPLOY_TOKEN="$(tr -d '\n\r' < "$f")" ;;
+              esac
+              [ -n "${DEPLOY_TOKEN}" ] && break
+            fi
+          done
+          if [ -z "${DEPLOY_TOKEN}" ] && [ -n "${DASMLAB_GHCR_PAT:-}" ]; then
+            DEPLOY_TOKEN="${DASMLAB_GHCR_PAT}"
           fi
           if [ -z "${DEPLOY_TOKEN}" ]; then
-            DEPLOY_TOKEN="${{ secrets.DASMLAB_GHCR_PAT }}"
-          fi
-          if [ -z "${DEPLOY_TOKEN}" ] && [ -f "/home/dasm/gh-pat" ]; then
-            source /home/dasm/gh-pat
-            DEPLOY_TOKEN="${DASMLAB_GHCR_PAT:-${GH_TOKEN:-}}"
-          fi
-          if [ -z "${DEPLOY_TOKEN}" ]; then
-            echo "ERROR: deploy token not set"
+            echo "ERROR: deploy token not set (need /home/dasm/gh_token on runner or repo secret DASMLAB_GHCR_PAT)"
             exit 1
           fi
 
