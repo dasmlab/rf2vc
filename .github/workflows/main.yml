@@ -26,9 +26,9 @@ jobs:
     permissions:
       contents: write
     outputs:
-      version_tag: ${{ steps.meta.outputs.version_tag }}
-      semver: ${{ steps.meta.outputs.semver }}
-      git_tag: ${{ steps.meta.outputs.git_tag }}
+      version_tag: ${{ steps.claim.outputs.version_tag || steps.meta.outputs.version_tag }}
+      semver: ${{ steps.claim.outputs.semver || steps.meta.outputs.semver }}
+      git_tag: ${{ steps.claim.outputs.git_tag || steps.meta.outputs.git_tag }}
       is_prod: ${{ steps.meta.outputs.is_prod }}
       create_git_tag: ${{ steps.meta.outputs.create_git_tag }}
     steps:
@@ -92,34 +92,52 @@ jobs:
             echo "create_git_tag=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # Claim SemVer immediately so the next main commit bumps past this one.
-      # (Previously tagged only after build — slow/failed runs left every build at 1.0.1.)
+      # Claim SemVer via git tag only (no .localbuild commit on main — that raced).
       - name: Claim SemVer tag
+        id: claim
         if: steps.meta.outputs.is_prod == 'true' && steps.meta.outputs.create_git_tag == 'true' && steps.meta.outputs.version_tag != 'skip'
         env:
-          SEMVER: ${{ steps.meta.outputs.semver }}
-          GIT_TAG: ${{ steps.meta.outputs.git_tag }}
-          VERSION_TAG: ${{ steps.meta.outputs.version_tag }}
+          BUMP_KIND: ${{ github.event.inputs.bump || 'point' }}
         run: |
           set -euo pipefail
-          git config user.name "dasmlab-bot"
-          git config user.email "ci@dasmlab.org"
-          git fetch --tags origin
+          chmod +x scripts/ci/resolve-version.sh
+          SHA="$(git rev-parse --short HEAD)"
 
-          echo "${SEMVER}" > .localbuild
-          git add .localbuild
-          if ! git diff --cached --quiet; then
-            git commit -m "chore: bump .localbuild to ${SEMVER} [skip ci]"
-            git push origin "HEAD:${GITHUB_REF_NAME}"
-          fi
+          claimed=""
+          for attempt in 1 2 3 4 5 6 7 8; do
+            git fetch --tags origin
+            # Drop any local tag that isn't on origin yet from a failed prior attempt.
+            # Re-resolve against latest remote tags each attempt.
+            rm -f /tmp/rf2vc-ver.out
+            BUMP=1 BUMP_KIND="${BUMP_KIND}" SHA="${SHA}" \
+              ./scripts/ci/resolve-version.sh | tee /tmp/rf2vc-ver.out
+            SEMVER="$(awk -F= '/^semver=/{print $2}' /tmp/rf2vc-ver.out | tail -1)"
+            GIT_TAG="$(awk -F= '/^git_tag=/{print $2}' /tmp/rf2vc-ver.out | tail -1)"
+            VERSION_TAG="$(awk -F= '/^version_tag=/{print $2}' /tmp/rf2vc-ver.out | tail -1)"
 
-          if git rev-parse "refs/tags/${GIT_TAG}" >/dev/null 2>&1; then
-            echo "Tag ${GIT_TAG} already exists"
-          else
-            git tag -a "${GIT_TAG}" -m "rf2vc ${GIT_TAG} (${VERSION_TAG})"
-            git push origin "${GIT_TAG}"
+            if git ls-remote --tags origin "refs/tags/${GIT_TAG}" | grep -q .; then
+              echo "Tag ${GIT_TAG} already on origin (attempt ${attempt}); retry"
+              continue
+            fi
+
+            git tag -f -a "${GIT_TAG}" -m "rf2vc ${GIT_TAG} (${VERSION_TAG})"
+            if git push origin "refs/tags/${GIT_TAG}"; then
+              claimed=1
+              echo "semver=${SEMVER}" >> "$GITHUB_OUTPUT"
+              echo "git_tag=${GIT_TAG}" >> "$GITHUB_OUTPUT"
+              echo "version_tag=${VERSION_TAG}" >> "$GITHUB_OUTPUT"
+              echo "Claimed ${GIT_TAG} for ${VERSION_TAG}"
+              break
+            fi
+            echo "Tag push raced (attempt ${attempt}); retry"
+            git tag -d "${GIT_TAG}" 2>/dev/null || true
+            sleep 1
+          done
+
+          if [ -z "${claimed}" ]; then
+            echo "ERROR: could not claim a SemVer tag after retries"
+            exit 1
           fi
-          echo "Claimed ${GIT_TAG} for ${VERSION_TAG}"
 
   test:
     needs: prepare
