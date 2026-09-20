@@ -271,7 +271,6 @@ jobs:
           cache: false
 
       - name: Ensure prod HAProxy cert
-        continue-on-error: true
         env:
           PREVIEW_PROXY_SSH_KEY: ${{ secrets.PREVIEW_PROXY_SSH_KEY }}
           PREVIEW_PROXY_HOST: "10.20.1.10"

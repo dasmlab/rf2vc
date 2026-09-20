@@ -26,8 +26,20 @@ elif [[ -n "${PREVIEW_PROXY_SSH_KEY:-}" ]]; then
   chmod 600 "${_SSH_KEY_TMP}"
   REMOTE_SSH+=(-i "${_SSH_KEY_TMP}")
 else
-  echo "ERROR: set PREVIEW_PROXY_SSH_KEY or SSH_IDENTITY_FILE" >&2
-  exit 1
+  # Self-hosted runners often already have the proxy key on disk.
+  for f in /home/dasm/.ssh/id_rsa "$HOME/.ssh/id_rsa" /home/dasm/.ssh/id_ecdsa "$HOME/.ssh/id_ecdsa"; do
+    if [[ -f "$f" ]]; then
+      SSH_IDENTITY_FILE="$f"
+      break
+    fi
+  done
+  if [[ -n "${SSH_IDENTITY_FILE:-}" && -f "${SSH_IDENTITY_FILE}" ]]; then
+    echo "Using runner SSH identity ${SSH_IDENTITY_FILE}"
+    REMOTE_SSH+=(-i "${SSH_IDENTITY_FILE}")
+  else
+    echo "ERROR: set PREVIEW_PROXY_SSH_KEY or SSH_IDENTITY_FILE (or place id_rsa on the runner)" >&2
+    exit 1
+  fi
 fi
 
 "${REMOTE_SSH[@]}" "${PROXY_USER}@${PROXY_HOST}" bash -s -- "${FQDN}" "${PROXY_DIR}" <<'EOS'
