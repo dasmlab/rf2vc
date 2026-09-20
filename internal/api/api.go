@@ -3,9 +3,11 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/dasmlab/rf2vc/internal/activity"
 	"github.com/dasmlab/rf2vc/internal/store"
 	"github.com/dasmlab/rf2vc/internal/vsphere"
 )
@@ -22,6 +24,8 @@ func New(st *store.Store, pool *vsphere.Pool, version string) *Server {
 
 func (s *Server) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/status", s.status)
+	mux.HandleFunc("/api/v1/settings", s.settings)
+	mux.HandleFunc("/api/v1/activity", s.activity)
 	mux.HandleFunc("/api/v1/vcenters", s.vcenters)
 	mux.HandleFunc("/api/v1/vcenters/", s.vcenterItem)
 	mux.HandleFunc("/api/v1/mappings", s.mappings)
@@ -40,12 +44,62 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	vc, mp := s.st.Stats()
+	settings := s.st.GetSettings()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"service":  "rf2vc",
 		"version":  s.version,
 		"vcenters": vc,
 		"mappings": mp,
+		"dryRun":   settings.DryRun,
 		"time":     time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, s.st.GetSettings())
+	case http.MethodPut, http.MethodPatch:
+		var body struct {
+			DryRun *bool `json:"dryRun"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if body.DryRun == nil {
+			http.Error(w, "dryRun required", http.StatusBadRequest)
+			return
+		}
+		out, err := s.st.SetGlobalDryRun(*body.DryRun)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		activity.Run("settings", "global dry-run set", map[string]any{"dryRun": out.DryRun})
+		writeJSON(w, http.StatusOK, out)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) activity(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ch := activity.Channel(strings.TrimSpace(r.URL.Query().Get("channel")))
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	after, _ := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
+	var events []activity.Event
+	if after > 0 {
+		events = activity.Default().Since(after, ch, limit)
+	} else {
+		events = activity.Default().Snapshot(ch, limit)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"events": events,
+		"count":  len(events),
 	})
 }
 
@@ -101,6 +155,10 @@ func (s *Server) vcenterItem(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(parts) == 2 && parts[1] == "vms" && r.Method == http.MethodGet {
 		s.vcFolderVMs(w, r, id)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "dry-run" && (r.Method == http.MethodPut || r.Method == http.MethodPost) {
+		s.vcDryRun(w, r, id)
 		return
 	}
 	if len(parts) != 1 {
@@ -239,6 +297,27 @@ func (s *Server) vcHealth(w http.ResponseWriter, r *http.Request, id string) {
 	writeJSON(w, http.StatusOK, vsphere.ProbeHealth(r.Context(), ep))
 }
 
+func (s *Server) vcDryRun(w http.ResponseWriter, r *http.Request, id string) {
+	var body struct {
+		DryRun bool `json:"dryRun"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	out, err := s.st.SetVCenterDryRun(id, body.DryRun)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	activity.Run("settings", "vcenter dry-run set", map[string]any{
+		"vcenterId": id,
+		"name":      out.Name,
+		"dryRun":    out.DryRun,
+	})
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (s *Server) vcFolderVMs(w http.ResponseWriter, r *http.Request, id string) {
 	vc, ok := s.st.GetVCenterSecret(id)
 	if !ok {
@@ -246,6 +325,7 @@ func (s *Server) vcFolderVMs(w http.ResponseWriter, r *http.Request, id string) 
 		return
 	}
 	if strings.TrimSpace(vc.Folder) == "" {
+		activity.RunWarn("folder-scan", "folder not set on vCenter", map[string]any{"vcenterId": id, "name": vc.Name})
 		writeJSON(w, http.StatusOK, map[string]any{
 			"folder":    "",
 			"recursive": true,
@@ -255,8 +335,14 @@ func (s *Server) vcFolderVMs(w http.ResponseWriter, r *http.Request, id string) 
 		})
 		return
 	}
+	activity.Run("folder-scan", "API refresh requested", map[string]any{
+		"vcenterId": id,
+		"name":      vc.Name,
+		"folder":    vc.Folder,
+	})
 	c, err := s.pool.For(vc)
 	if err != nil {
+		activity.RunErr("folder-scan", err.Error(), map[string]any{"vcenterId": id})
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -379,12 +465,24 @@ func (s *Server) mappingPower(w http.ResponseWriter, r *http.Request, uuid strin
 		http.Error(w, `resetType must be "On" or "ForceOff"`, http.StatusBadRequest)
 		return
 	}
+	detail := map[string]any{"uuid": uuid, "resetType": rt}
+	if s.st.DryRunForUUID(uuid) {
+		activity.OutDry("admin-power", "would power VM from UI (dry-run)", detail)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":      true,
+			"dryRun":  true,
+			"message": "dry-run: power action not sent to vSphere",
+		})
+		return
+	}
 	c, _, err := s.pool.ClientForUUID(s.st, uuid)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
+	activity.Out("admin-power", "applying power from UI", detail)
 	if err := c.Reset(r.Context(), uuid, rt); err != nil {
+		activity.OutErr("admin-power", err.Error(), detail)
 		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}

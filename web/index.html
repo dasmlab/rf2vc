@@ -21,13 +21,21 @@
         <p class="headline">Redfish to vSphere.</p>
         <p class="lede">Configure vCenters, bind BIOS UUIDs, and route BMH <code>/redfish/v1/Systems/&lt;uuid&gt;</code>.</p>
         <div class="cta-row">
+          <nav class="view-nav" aria-label="Primary">
+            <button type="button" class="pill ghost sm active" data-view="inventory" id="navInventory">Inventory</button>
+            <button type="button" class="pill ghost sm" data-view="activity" id="navActivity">Activity</button>
+          </nav>
           <button type="button" class="pill primary" id="btnAddVC">Add vCenter</button>
+          <label class="dry-toggle" title="Fake outbound vSphere mutations (power/ISO); connection and inventory stay real">
+            <input type="checkbox" id="globalDryRun" />
+            <span>Dry-run</span>
+          </label>
           <span class="status-chip" id="statusLine">loading…</span>
         </div>
       </div>
     </header>
 
-    <section class="workspace rise" style="--d:80ms">
+    <section class="workspace rise" id="viewInventory" style="--d:80ms">
       <aside class="shell vc-pane">
         <div class="pane-head">
           <div>
@@ -48,6 +56,46 @@
           </div>
         </div>
       </main>
+    </section>
+
+    <section class="activity-workspace rise hidden" id="viewActivity" style="--d:80ms" aria-label="Activity logs">
+      <div class="activity-toolbar shell">
+        <div>
+          <p class="caps">Observability</p>
+          <h2 class="pane-title">Activity</h2>
+          <p class="detail-meta">Inbound ACM/BMH · runtime housekeeping · outbound vSphere (or dry-run)</p>
+        </div>
+        <div class="activity-toolbar-actions">
+          <label class="dry-toggle">
+            <input type="checkbox" id="activityDryRun" />
+            <span>Dry-run mode</span>
+          </label>
+          <button type="button" class="pill ghost sm" id="btnClearActivityHint" title="Logs are in-memory; restart clears">Live · polls 2s</button>
+        </div>
+      </div>
+      <div class="activity-grid">
+        <article class="shell activity-pane" data-channel="inbound">
+          <header class="activity-pane-head">
+            <h3>Inbound</h3>
+            <p>ACM / BMH → Redfish</p>
+          </header>
+          <div class="activity-log" id="logInbound"></div>
+        </article>
+        <article class="shell activity-pane" data-channel="runtime">
+          <header class="activity-pane-head">
+            <h3>Runtime</h3>
+            <p>Housekeeping · scans · health</p>
+          </header>
+          <div class="activity-log" id="logRuntime"></div>
+        </article>
+        <article class="shell activity-pane" data-channel="outbound">
+          <header class="activity-pane-head">
+            <h3>Outbound</h3>
+            <p>rf2vc → vSphere</p>
+          </header>
+          <div class="activity-log" id="logOutbound"></div>
+        </article>
+      </div>
     </section>
   </div>
 

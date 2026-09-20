@@ -68,17 +68,123 @@ document.addEventListener("keydown", (e) => {
 
 let vcenters = [];
 let mappings = [];
+let globalDryRun = false;
 /** @type {null | { mode: 'view'|'edit'|'create', id?: string, tab?: 'uuids'|'iso' }} */
 let ui = null;
+/** @type {'inventory'|'activity'} */
+let pageView = "inventory";
+let activityTimer = null;
+const activityLastId = { inbound: 0, runtime: 0, outbound: 0 };
 
 function mappingsFor(vcId) {
   return mappings.filter(m => m.vcenterId === vcId);
 }
 
+function syncDryRunToggles() {
+  const a = $("#globalDryRun");
+  const b = $("#activityDryRun");
+  if (a) a.checked = globalDryRun;
+  if (b) b.checked = globalDryRun;
+  document.body.classList.toggle("dry-run-on", globalDryRun);
+}
+
+async function setGlobalDryRun(on) {
+  const res = await api("/api/v1/settings", {
+    method: "PUT",
+    body: JSON.stringify({ dryRun: !!on }),
+  });
+  globalDryRun = !!res.dryRun;
+  syncDryRunToggles();
+  await refreshStatus();
+}
+
 async function refreshStatus() {
   const st = await api("/api/v1/status");
+  globalDryRun = !!st.dryRun;
+  syncDryRunToggles();
+  const dry = globalDryRun ? " · DRY-RUN" : "";
   $("#statusLine").textContent =
-    `${st.version} · ${st.vcenters} vCenter · ${st.mappings} UUID`;
+    `${st.version} · ${st.vcenters} vCenter · ${st.mappings} UUID${dry}`;
+}
+
+function setPageView(view) {
+  pageView = view === "activity" ? "activity" : "inventory";
+  $("#viewInventory")?.classList.toggle("hidden", pageView !== "inventory");
+  $("#viewActivity")?.classList.toggle("hidden", pageView !== "activity");
+  $("#navInventory")?.classList.toggle("active", pageView === "inventory");
+  $("#navActivity")?.classList.toggle("active", pageView === "activity");
+  if (pageView === "activity") startActivityPoll();
+  else stopActivityPoll();
+}
+
+function stopActivityPoll() {
+  if (activityTimer) {
+    clearInterval(activityTimer);
+    activityTimer = null;
+  }
+}
+
+function startActivityPoll() {
+  stopActivityPoll();
+  refreshActivity(true);
+  activityTimer = setInterval(() => refreshActivity(false), 2000);
+}
+
+function formatActivityTime(ts) {
+  try {
+    const d = new Date(ts);
+    return d.toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  } catch {
+    return "";
+  }
+}
+
+function renderActivityChannel(el, events, replace) {
+  if (!el) return;
+  if (replace) el.innerHTML = "";
+  if (!events.length && replace) {
+    el.innerHTML = `<div class="activity-empty">No events yet.</div>`;
+    return;
+  }
+  const html = events.map(ev => {
+    const detail = ev.detail ? ` ${escapeHtml(JSON.stringify(ev.detail))}` : "";
+    return `<div class="activity-line level-${escapeHtml(ev.level || "info")}${ev.dryRun ? " dry" : ""}">
+      <span class="t">${escapeHtml(formatActivityTime(ev.ts))}</span>
+      <span class="op">${escapeHtml(ev.op || "")}</span>
+      <span class="m">${escapeHtml(ev.message || "")}${detail}</span>
+    </div>`;
+  }).join("");
+  if (replace) el.innerHTML = html;
+  else {
+    el.insertAdjacentHTML("beforeend", html);
+    el.scrollTop = el.scrollHeight;
+  }
+}
+
+async function refreshActivity(full) {
+  const channels = [
+    ["inbound", "logInbound"],
+    ["runtime", "logRuntime"],
+    ["outbound", "logOutbound"],
+  ];
+  await Promise.all(channels.map(async ([ch, id]) => {
+    const q = full
+      ? `/api/v1/activity?channel=${ch}&limit=200`
+      : `/api/v1/activity?channel=${ch}&after=${activityLastId[ch]}&limit=100`;
+    try {
+      const res = await api(q);
+      const events = res.events || [];
+      if (!events.length) {
+        if (full) renderActivityChannel($("#" + id), [], true);
+        return;
+      }
+      activityLastId[ch] = events[events.length - 1].id;
+      renderActivityChannel($("#" + id), events, full);
+    } catch (err) {
+      const el = $("#" + id);
+      if (el && full) el.innerHTML = `<div class="activity-empty err">${escapeHtml(err.message)}</div>`;
+    }
+  }));
 }
 
 function renderVCList() {
@@ -90,9 +196,12 @@ function renderVCList() {
   box.innerHTML = vcenters.map(vc => {
     const n = mappingsFor(vc.id).length;
     const active = ui && (ui.id === vc.id || (ui.mode === "edit" && ui.id === vc.id));
+    const dry = vc.dryRun || globalDryRun
+      ? `<span class="pill-tag dry">dry-run</span>`
+      : "";
     return `
       <button type="button" class="vc-item ${active ? "active" : ""}" data-select="${vc.id}">
-        <div class="name">${escapeHtml(vc.name)}</div>
+        <div class="name">${escapeHtml(vc.name)} ${dry}</div>
         <p class="meta">${escapeHtml(vc.url)}</p>
         <p class="meta">${escapeHtml(vc.datacenter)} / ${escapeHtml(dsLabel(vc.datastore))}</p>
         <span class="count">${n} UUID${n === 1 ? "" : "s"}</span>
@@ -205,6 +314,10 @@ function showVCView(vc) {
         <p class="msg" id="vcTestMsg"></p>
       </div>
       <div class="detail-actions">
+        <label class="dry-toggle sm" title="Fake outbound mutations for this vCenter only">
+          <input type="checkbox" data-vc-dry="${vc.id}" ${vc.dryRun || globalDryRun ? "checked" : ""} ${globalDryRun ? "disabled" : ""} />
+          <span>Dry-run</span>
+        </label>
         <button type="button" class="pill ghost sm" data-test-vc="${vc.id}">Test</button>
         <button type="button" class="pill ghost sm" data-refresh-health="${vc.id}">Refresh</button>
         <button type="button" class="pill ghost sm" data-edit="${vc.id}">Edit</button>
@@ -359,13 +472,16 @@ async function loadUUIDTab(vc) {
   if (!vc.folder) {
     folderMsg = "Folder not set — showing bound UUIDs only. Set GOVC_FOLDER to discover VMs under that path (recursive).";
   } else {
-    if (summary) summary.textContent = `Scanning ${vc.folder} (recursive)…`;
+    if (summary) summary.textContent = `Scanning ${vc.folder} (recursive)… — watch Activity → Runtime or oc logs -f`;
     try {
       const res = await api(`/api/v1/vcenters/${vc.id}/vms`);
       discovered = res.vms || [];
       folderMsg = res.error
         ? `Folder scan failed: ${res.error}`
         : `Folder · ${discovered.length} VM(s) under ${vc.folder} (includes subfolders) · ${mapped.length} bound`;
+      if (!res.error && discovered.length === 0) {
+        folderMsg += " — see Activity / Runtime for candidate paths tried";
+      }
     } catch (err) {
       folderMsg = `Folder scan failed: ${err.message}`;
     }
@@ -375,7 +491,6 @@ async function loadUUIDTab(vc) {
   const countEl = $("#uuidTabCount");
   if (countEl) countEl.textContent = `(${rows.length})`;
   renderUUIDRows(vc, rows);
-  // Live status for bound rows; discovered-only already have light from inventory.
   await Promise.all(rows.filter(r => r.bound).map(r => loadUUIDStatus(r.uuid)));
 }
 
@@ -580,14 +695,57 @@ async function reload(selectId) {
 $("#btnAddVC").addEventListener("click", showCreateForm);
 $("#btnAddVC2").addEventListener("click", showCreateForm);
 
+document.querySelectorAll("[data-view]").forEach(btn => {
+  btn.addEventListener("click", () => setPageView(btn.getAttribute("data-view")));
+});
+
+async function onDryRunToggle(e) {
+  const on = e.target.checked;
+  try {
+    await setGlobalDryRun(on);
+    if (ui?.id) {
+      const vc = vcenters.find(v => v.id === ui.id);
+      if (vc && ui.mode === "view") showVCView(vc);
+      else renderVCList();
+    } else renderVCList();
+  } catch (err) {
+    e.target.checked = !on;
+    alert(err.message);
+  }
+}
+$("#globalDryRun")?.addEventListener("change", onDryRunToggle);
+$("#activityDryRun")?.addEventListener("change", onDryRunToggle);
+
+$("#detailPane").addEventListener("change", async (e) => {
+  const input = e.target.closest("[data-vc-dry]");
+  if (!input || !input.matches("input[type=checkbox]")) return;
+  const id = input.getAttribute("data-vc-dry");
+  const on = input.checked;
+  try {
+    const out = await api(`/api/v1/vcenters/${id}/dry-run`, {
+      method: "PUT",
+      body: JSON.stringify({ dryRun: on }),
+    });
+    const idx = vcenters.findIndex(v => v.id === id);
+    if (idx >= 0) vcenters[idx] = { ...vcenters[idx], dryRun: out.dryRun };
+    renderVCList();
+  } catch (err) {
+    input.checked = !on;
+    alert(err.message);
+  }
+});
+
 $("#vcList").addEventListener("click", (e) => {
   const id = e.target.closest("[data-select]")?.getAttribute("data-select");
   if (!id) return;
+  setPageView("inventory");
   const vc = vcenters.find(v => v.id === id);
   if (vc) showVCView(vc);
 });
 
 $("#detailPane").addEventListener("click", async (e) => {
+  if (e.target.closest("[data-vc-dry]")) return;
+
   const tab = e.target.getAttribute("data-tab");
   if (tab && ui?.id) {
     ui.tab = tab;

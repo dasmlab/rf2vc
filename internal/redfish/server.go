@@ -2,10 +2,10 @@ package redfish
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"strings"
 
+	"github.com/dasmlab/rf2vc/internal/activity"
 	"github.com/dasmlab/rf2vc/internal/config"
 	"github.com/dasmlab/rf2vc/internal/store"
 	"github.com/dasmlab/rf2vc/internal/vsphere"
@@ -32,6 +32,7 @@ func (s *Server) Mount(mux *http.ServeMux) {
 func (s *Server) clientFor(w http.ResponseWriter, uuid string) (*vsphere.Client, bool) {
 	c, _, err := s.pool.ClientForUUID(s.st, uuid)
 	if err != nil {
+		activity.InErr("resolve", err.Error(), map[string]any{"uuid": uuid})
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return nil, false
 	}
@@ -44,7 +45,10 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	if p == "" {
 		p = "/"
 	}
-	log.Printf("%s %s", r.Method, r.URL.Path)
+	activity.In(r.Method, r.URL.Path, map[string]any{
+		"remote": r.RemoteAddr,
+		"ua":     r.UserAgent(),
+	})
 
 	switch {
 	case p == "/" && r.Method == http.MethodGet:
@@ -91,6 +95,7 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		sys := r.URL.Query().Get("system")
 		s.ejectMedia(w, r, sys)
 	default:
+		activity.InErr("not-found", r.URL.Path, nil)
 		http.NotFound(w, r)
 	}
 }
@@ -145,6 +150,7 @@ func (s *Server) systemGet(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	sys, err := c.GetSystem(r.Context(), id)
 	if err != nil {
+		activity.InErr("system-get", err.Error(), map[string]any{"uuid": id})
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
@@ -187,10 +193,6 @@ func (s *Server) systemGet(w http.ResponseWriter, r *http.Request, id string) {
 }
 
 func (s *Server) systemReset(w http.ResponseWriter, r *http.Request, id string) {
-	c, ok := s.clientFor(w, id)
-	if !ok {
-		return
-	}
 	var body struct {
 		ResetType string `json:"ResetType"`
 	}
@@ -198,7 +200,19 @@ func (s *Server) systemReset(w http.ResponseWriter, r *http.Request, id string) 
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	detail := map[string]any{"uuid": id, "resetType": body.ResetType}
+	if s.st.DryRunForUUID(id) {
+		activity.OutDry("ComputerSystem.Reset", "would power/reset VM (dry-run)", detail)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	c, ok := s.clientFor(w, id)
+	if !ok {
+		return
+	}
+	activity.Out("ComputerSystem.Reset", "applying power action", detail)
 	if err := c.Reset(r.Context(), id, body.ResetType); err != nil {
+		activity.OutErr("ComputerSystem.Reset", err.Error(), detail)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -206,10 +220,6 @@ func (s *Server) systemReset(w http.ResponseWriter, r *http.Request, id string) 
 }
 
 func (s *Server) systemPatch(w http.ResponseWriter, r *http.Request, id string) {
-	c, ok := s.clientFor(w, id)
-	if !ok {
-		return
-	}
 	var body struct {
 		Boot *struct {
 			BootSourceOverrideTarget  string `json:"BootSourceOverrideTarget"`
@@ -223,7 +233,19 @@ func (s *Server) systemPatch(w http.ResponseWriter, r *http.Request, id string) 
 	if body.Boot != nil {
 		target := strings.ToLower(body.Boot.BootSourceOverrideTarget)
 		if target == "cd" || target == "cdrom" || target == "usb" {
+			detail := map[string]any{"uuid": id, "bootTarget": target}
+			if s.st.DryRunForUUID(id) {
+				activity.OutDry("BootOverride", "would set boot CD once (dry-run)", detail)
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			c, ok := s.clientFor(w, id)
+			if !ok {
+				return
+			}
+			activity.Out("BootOverride", "set boot CD once", detail)
 			if err := c.SetBootCDOnce(r.Context(), id); err != nil {
+				activity.OutErr("BootOverride", err.Error(), detail)
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
@@ -324,10 +346,6 @@ func (s *Server) insertMedia(w http.ResponseWriter, r *http.Request, systemID st
 		http.Error(w, "system id required", http.StatusBadRequest)
 		return
 	}
-	c, ok := s.clientFor(w, systemID)
-	if !ok {
-		return
-	}
 	var body struct {
 		Image          string `json:"Image"`
 		Inserted       *bool  `json:"Inserted"`
@@ -341,8 +359,19 @@ func (s *Server) insertMedia(w http.ResponseWriter, r *http.Request, systemID st
 		http.Error(w, "Image is required", http.StatusBadRequest)
 		return
 	}
-	log.Printf("InsertMedia system=%s image=%s", systemID, body.Image)
+	detail := map[string]any{"uuid": systemID, "image": body.Image}
+	if s.st.DryRunForUUID(systemID) {
+		activity.OutDry("InsertMedia", "would stage/attach ISO (dry-run) — no upload or CDROM change", detail)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	c, ok := s.clientFor(w, systemID)
+	if !ok {
+		return
+	}
+	activity.Out("InsertMedia", "staging/attaching ISO", detail)
 	if err := c.InsertMedia(r.Context(), systemID, body.Image); err != nil {
+		activity.OutErr("InsertMedia", err.Error(), detail)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -354,12 +383,19 @@ func (s *Server) ejectMedia(w http.ResponseWriter, r *http.Request, systemID str
 		http.Error(w, "system id required", http.StatusBadRequest)
 		return
 	}
+	detail := map[string]any{"uuid": systemID}
+	if s.st.DryRunForUUID(systemID) {
+		activity.OutDry("EjectMedia", "would eject CDROM (dry-run)", detail)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	c, ok := s.clientFor(w, systemID)
 	if !ok {
 		return
 	}
-	log.Printf("EjectMedia system=%s", systemID)
+	activity.Out("EjectMedia", "ejecting CDROM", detail)
 	if err := c.EjectMedia(r.Context(), systemID); err != nil {
+		activity.OutErr("EjectMedia", err.Error(), detail)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

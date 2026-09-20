@@ -25,6 +25,7 @@ type VCenter struct {
 	Folder     string `json:"folder,omitempty"` // GOVC_FOLDER, e.g. /Montreal/vm/VMs/TDM/OpenShift/ACM/LAB
 	ISOFolder  string `json:"isoFolder"`
 	Notes      string `json:"notes,omitempty"`
+	DryRun     bool   `json:"dryRun,omitempty"` // per-vCenter: fake outbound mutations
 }
 
 // Mapping binds a BIOS UUID to a vCenter.
@@ -35,9 +36,15 @@ type Mapping struct {
 	Notes     string `json:"notes,omitempty"`
 }
 
+// Settings are process-wide prefs persisted in state.json.
+type Settings struct {
+	DryRun bool `json:"dryRun"` // global: fake all outbound mutations
+}
+
 type State struct {
 	VCenters []VCenter `json:"vcenters"`
 	Mappings []Mapping `json:"mappings"`
+	Settings Settings  `json:"settings"`
 }
 
 // Store is an in-memory view of state.json with atomic PVC persistence.
@@ -46,6 +53,7 @@ type Store struct {
 	path     string
 	vcenters map[string]VCenter // id -> vc
 	byUUID   map[string]Mapping // normalized uuid -> mapping
+	settings Settings
 }
 
 func Open(dataDir string) (*Store, error) {
@@ -85,6 +93,7 @@ func (s *Store) load() error {
 	defer s.mu.Unlock()
 	s.vcenters = map[string]VCenter{}
 	s.byUUID = map[string]Mapping{}
+	s.settings = st.Settings
 	for _, vc := range st.VCenters {
 		if vc.ID == "" {
 			continue
@@ -92,6 +101,7 @@ func (s *Store) load() error {
 		if vc.ISOFolder == "" {
 			vc.ISOFolder = "rf2vc/isos"
 		}
+		vc.Datastore = normalizeDatastore(vc.Datastore)
 		s.vcenters[vc.ID] = vc
 	}
 	for _, m := range st.Mappings {
@@ -109,6 +119,7 @@ func (s *Store) snapshot() State {
 	st := State{
 		VCenters: make([]VCenter, 0, len(s.vcenters)),
 		Mappings: make([]Mapping, 0, len(s.byUUID)),
+		Settings: s.settings,
 	}
 	for _, vc := range s.vcenters {
 		st.VCenters = append(st.VCenters, vc)
@@ -259,12 +270,79 @@ func (s *Store) UpsertVCenter(vc VCenter) (VCenter, error) {
 		if vc.Password == "" {
 			vc.Password = existing.Password
 		}
+		// Preserve dry-run unless caller set it via SetVCenterDryRun.
+		// Upsert from the edit form does not toggle DryRun.
+		vc.DryRun = existing.DryRun
 	}
 	s.vcenters[vc.ID] = vc
 	if err := s.persistLocked(); err != nil {
 		return VCenter{}, err
 	}
 	return redact(vc), nil
+}
+
+// GetSettings returns process-wide settings.
+func (s *Store) GetSettings() Settings {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.settings
+}
+
+// SetGlobalDryRun toggles fake-outbound mode for all vCenters.
+func (s *Store) SetGlobalDryRun(on bool) (Settings, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.settings.DryRun = on
+	if err := s.persistLocked(); err != nil {
+		return Settings{}, err
+	}
+	return s.settings, nil
+}
+
+// SetVCenterDryRun toggles dry-run on one endpoint.
+func (s *Store) SetVCenterDryRun(id string, on bool) (VCenter, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	vc, ok := s.vcenters[id]
+	if !ok {
+		return VCenter{}, fmt.Errorf("vcenter %s not found", id)
+	}
+	vc.DryRun = on
+	s.vcenters[id] = vc
+	if err := s.persistLocked(); err != nil {
+		return VCenter{}, err
+	}
+	return redact(vc), nil
+}
+
+// DryRunActive reports whether outbound mutations should be faked for this vCenter.
+func (s *Store) DryRunActive(vcID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.settings.DryRun {
+		return true
+	}
+	if vc, ok := s.vcenters[vcID]; ok {
+		return vc.DryRun
+	}
+	return false
+}
+
+// DryRunForUUID resolves the mapping's vCenter and checks dry-run.
+func (s *Store) DryRunForUUID(uuid string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.settings.DryRun {
+		return true
+	}
+	m, ok := s.byUUID[NormalizeUUID(uuid)]
+	if !ok {
+		return false
+	}
+	if vc, ok := s.vcenters[m.VCenterID]; ok {
+		return vc.DryRun
+	}
+	return false
 }
 
 func (s *Store) DeleteVCenter(id string) error {

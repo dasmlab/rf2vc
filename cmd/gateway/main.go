@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dasmlab/rf2vc/internal/activity"
 	"github.com/dasmlab/rf2vc/internal/api"
 	"github.com/dasmlab/rf2vc/internal/config"
 	"github.com/dasmlab/rf2vc/internal/redfish"
@@ -86,8 +87,15 @@ func main() {
 
 	go func() {
 		vc, mp := st.Stats()
-		log.Printf("rf2vc %s listening on %s (dataDir=%s vcenters=%d mappings=%d)",
-			buildVersion, cfg.Listen, cfg.DataDir, vc, mp)
+		log.Printf("rf2vc %s listening on %s (dataDir=%s vcenters=%d mappings=%d dryRun=%v)",
+			buildVersion, cfg.Listen, cfg.DataDir, vc, mp, st.GetSettings().DryRun)
+		activity.Run("startup", "gateway listening", map[string]any{
+			"version":  buildVersion,
+			"listen":   cfg.Listen,
+			"vcenters": vc,
+			"mappings": mp,
+			"dryRun":   st.GetSettings().DryRun,
+		})
 		var err error
 		if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
 			err = srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
