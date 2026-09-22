@@ -230,21 +230,23 @@ func (c *Client) findByUUID(ctx context.Context, uuid string) (*object.VirtualMa
 	// SearchIndex.FindByUuid is often denied for least-priv SAs that can still
 	// list/operate VMs under GOVC_FOLDER (same as govc vm.info $GOVC_FOLDER/...).
 	if folder := strings.TrimSpace(c.ep.Folder); folder != "" {
-		if vm, ferr := c.findByUUIDInFolder(ctx, uuid, folder); ferr == nil {
+		vm, ferr := c.findByUUIDInFolder(ctx, uuid, folder)
+		if ferr == nil {
 			activity.Run("vm-lookup", "resolved via folder walk (FindByUuid unavailable)", map[string]any{
-				"uuid":            uuid,
-				"path":            vm.InventoryPath,
-				"searchIndexErr":  firstErr.Error(),
+				"uuid":           uuid,
+				"path":           vm.InventoryPath,
+				"searchIndexErr": firstErr.Error(),
 			})
 			return vm, nil
-		} else {
-			activity.RunWarn("vm-lookup", "folder walk missed uuid", map[string]any{
-				"uuid":   uuid,
-				"folder": folder,
-				"error":  ferr.Error(),
-				"first":  firstErr.Error(),
-			})
 		}
+		activity.RunWarn("vm-lookup", "folder walk missed uuid", map[string]any{
+			"uuid":   uuid,
+			"folder": folder,
+			"error":  ferr.Error(),
+			"first":  firstErr.Error(),
+		})
+		// Prefer the folder-walk error — SearchIndex denial is expected for this SA.
+		return nil, ferr
 	}
 	return nil, firstErr
 }

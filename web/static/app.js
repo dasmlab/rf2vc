@@ -530,10 +530,10 @@ function applyUUIDStatus(uuid, st) {
     else if (st.found && !pathEl.textContent) pathEl.textContent = "—";
   }
   const cdEl = document.querySelector(`[data-cdrom="${CSS.escape(uuid)}"]`);
-  if (cdEl && st.cdromIso !== undefined) {
-    cdEl.textContent = st.cdromIso
-      ? st.cdromIso
-      : (st.found ? "(none / empty)" : "—");
+  if (cdEl) {
+    if (st.cdromIso) cdEl.textContent = st.cdromIso;
+    else if (st.found) cdEl.textContent = "(none / empty)";
+    else if (st.error) cdEl.textContent = "—";
   }
   const onBtn = document.querySelector(`[data-uuid-on="${CSS.escape(uuid)}"]`);
   const offBtn = document.querySelector(`[data-uuid-off="${CSS.escape(uuid)}"]`);

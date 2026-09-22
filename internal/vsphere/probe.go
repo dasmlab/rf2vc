@@ -204,7 +204,7 @@ type MappingStatus struct {
 	PowerState string `json:"powerState,omitempty"`
 	Name       string `json:"name,omitempty"`
 	Path       string `json:"path,omitempty"`
-	CDROMISO   string `json:"cdromIso,omitempty"`
+	CDROMISO   string `json:"cdromIso"` // datastore ISO path, or "" if empty/passthrough
 	Error      string `json:"error,omitempty"`
 }
 
