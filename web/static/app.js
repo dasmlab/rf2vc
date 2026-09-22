@@ -792,6 +792,7 @@ $("#detailPane").addEventListener("click", async (e) => {
     await reload();
   }
   if (unmap) {
+    if (!confirm("Unbind this UUID? The VM stays in vSphere; ACM/BMH will no longer reach it via rf2vc.")) return;
     await api(`/api/v1/mappings/${encodeURIComponent(unmap)}`, { method: "DELETE" });
     await reload(ui?.id);
   }
