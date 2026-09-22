@@ -449,7 +449,15 @@ func (s *Server) mappingStatus(w http.ResponseWriter, r *http.Request, uuid stri
 		})
 		return
 	}
-	writeJSON(w, http.StatusOK, c.MappingStatus(r.Context(), uuid))
+	st := c.MappingStatus(r.Context(), uuid)
+	activity.Run("uuid-status", "probed mapping", map[string]any{
+		"uuid":  uuid,
+		"found": st.Found,
+		"power": st.PowerState,
+		"light": st.Light,
+		"error": st.Error,
+	})
+	writeJSON(w, http.StatusOK, st)
 }
 
 func (s *Server) mappingPower(w http.ResponseWriter, r *http.Request, uuid string) {

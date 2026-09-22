@@ -789,3 +789,132 @@ body.dry-run-on .dry-toggle {
 .activity-line.level-dryrun,
 .activity-line.dry { background: rgba(212, 167, 74, 0.12); }
 .activity-line.level-dryrun .op { color: #6b5318; }
+
+/* Crisp labeled vCenter fields (VM-list style) */
+.detail-url {
+  margin: 0.15rem 0 0.65rem;
+  font-size: 0.92rem;
+  color: var(--dasm-text-soft);
+  word-break: break-all;
+}
+.field-grid {
+  margin: 0 0 0.85rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--dasm-border-soft);
+  border-radius: 10px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.field-row {
+  display: grid;
+  grid-template-columns: 7.5rem 1fr;
+  gap: 0.55rem;
+  align-items: start;
+  font-size: 0.9rem;
+}
+.field-row dt {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--dasm-text-muted);
+  padding-top: 0.15rem;
+}
+.field-row dd {
+  margin: 0;
+  font-weight: 600;
+  color: var(--dasm-ink);
+  word-break: break-word;
+  font-family: "Source Sans 3", sans-serif;
+}
+
+.health-block {
+  margin-top: 0.35rem;
+}
+.health-checks {
+  list-style: none;
+  margin: 0.55rem 0 0;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--dasm-border-soft);
+  border-radius: 10px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.health-check {
+  display: grid;
+  grid-template-columns: 1.1rem 8.5rem 1fr;
+  gap: 0.45rem;
+  align-items: start;
+  font-size: 0.88rem;
+}
+.health-check .mark { font-weight: 700; }
+.health-check .name { font-weight: 700; color: var(--dasm-ink); }
+.health-check .detail { color: var(--dasm-text-soft); word-break: break-word; }
+.health-check.ok .mark { color: #1f8a5b; }
+.health-check.err .mark { color: #c0392b; }
+.health-check.skip .mark,
+.health-check.skip .name { color: var(--dasm-text-muted); }
+
+.uuid-row-msg {
+  grid-column: 1 / -1;
+  margin: 0;
+  min-height: 0;
+  padding: 0 0.35rem;
+}
+.uuid-row-msg:empty { display: none; }
+
+/* Activity: full-width channel tabs */
+.activity-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0.55rem 0.75rem;
+  margin-bottom: 0.65rem;
+}
+.activity-tab {
+  appearance: none;
+  border: 1.5px solid var(--dasm-border-soft);
+  background: #fff;
+  font: inherit;
+  font-weight: 700;
+  color: var(--dasm-text-muted);
+  padding: 0.55rem 0.9rem;
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  line-height: 1.15;
+}
+.activity-tab .tab-hint {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--dasm-text-muted);
+}
+.activity-tab:hover { color: var(--dasm-ink); border-color: var(--dasm-border-strong); }
+.activity-tab.active {
+  background: var(--dasm-primary);
+  border-color: var(--dasm-primary);
+  color: #fff;
+}
+.activity-tab.active .tab-hint { color: rgba(255,255,255,0.85); }
+.activity-pane-full {
+  min-height: 28rem;
+  max-height: 72vh;
+}
+.activity-pane-full .activity-log {
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+.activity-pane-full .activity-line {
+  grid-template-columns: 5rem 8.5rem 1fr;
+  gap: 0.55rem;
+  padding: 0.4rem 0.25rem;
+}
+.activity-grid { display: none; }

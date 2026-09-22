@@ -218,6 +218,11 @@ func (c *Client) MappingStatus(ctx context.Context, uuid string) MappingStatus {
 		if strings.Contains(lower, "not found") || strings.Contains(lower, "outside govc_folder") {
 			out.Light = LightRed
 			out.Found = false
+		} else if isPermissionDenied(err) {
+			// Soft: mapping exists; inventory probe limited for this SA.
+			out.Light = LightYellow
+			out.Found = true
+			out.Error = "vSphere permission limited — power/name may be incomplete (VM still bound)"
 		} else {
 			out.Light = LightYellow
 			out.Found = false
@@ -227,6 +232,11 @@ func (c *Client) MappingStatus(ctx context.Context, uuid string) MappingStatus {
 	out.Found = true
 	info, err := c.infoFromVM(ctx, vm)
 	if err != nil {
+		if isPermissionDenied(err) {
+			out.Light = LightYellow
+			out.Error = "vSphere permission limited — cannot read VM props (VM still bound)"
+			return out
+		}
 		out.Light = LightYellow
 		out.Error = err.Error()
 		return out
@@ -237,12 +247,8 @@ func (c *Client) MappingStatus(ctx context.Context, uuid string) MappingStatus {
 		out.Path = pathName
 	} else if p, err := find.InventoryPath(ctx, c.client.Client, vm.Reference()); err == nil {
 		out.Path = p
-	} else if err != nil && isPermissionDenied(err) {
-		// Path is decorative; don't fail status or paint Path with ServerFaultCode.
-		if out.Error == "" {
-			out.Error = "inventory path: permission denied (VM still usable)"
-		}
 	}
+	// Path/CDROM permission issues are warnings, not hard failures.
 	switch info.PowerState {
 	case "On":
 		out.Light = LightGreen
@@ -256,7 +262,7 @@ func (c *Client) MappingStatus(ctx context.Context, uuid string) MappingStatus {
 	} else if err != nil && !strings.Contains(strings.ToLower(err.Error()), "no cdrom") {
 		if isPermissionDenied(err) {
 			if out.Error == "" {
-				out.Error = "cdrom: permission denied (need VirtualMachine.Config.Read)"
+				out.Error = "cdrom: permission limited (ISO map may need VirtualMachine.Interact / Config.Read)"
 			}
 		} else if out.Error == "" {
 			out.Error = "cdrom: " + err.Error()

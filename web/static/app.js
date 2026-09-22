@@ -75,6 +75,8 @@ let ui = null;
 let pageView = "inventory";
 let activityTimer = null;
 const activityLastId = { inbound: 0, runtime: 0, outbound: 0 };
+/** @type {'inbound'|'runtime'|'outbound'} */
+let activityTab = "inbound";
 
 function mappingsFor(vcId) {
   return mappings.filter(m => m.vcenterId === vcId);
@@ -124,8 +126,21 @@ function stopActivityPoll() {
   }
 }
 
+function setActivityTab(ch) {
+  activityTab = ch === "runtime" || ch === "outbound" ? ch : "inbound";
+  document.querySelectorAll("[data-activity-tab]").forEach(btn => {
+    const on = btn.getAttribute("data-activity-tab") === activityTab;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  $("#paneInbound")?.classList.toggle("hidden", activityTab !== "inbound");
+  $("#paneRuntime")?.classList.toggle("hidden", activityTab !== "runtime");
+  $("#paneOutbound")?.classList.toggle("hidden", activityTab !== "outbound");
+}
+
 function startActivityPoll() {
   stopActivityPoll();
+  setActivityTab(activityTab);
   refreshActivity(true);
   activityTimer = setInterval(() => refreshActivity(false), 2000);
 }
@@ -295,23 +310,33 @@ function showVCView(vc) {
   ui = { mode: "view", id: vc.id, tab };
   renderVCList();
   const mapped = mappingsFor(vc.id);
+  const notes = (vc.notes || "").trim();
+  const notesDup = notes && (notes === vc.folder || notes === vc.url);
 
   $("#detailBody").innerHTML = `
     <div class="detail-head">
-      <div>
+      <div class="detail-main">
         <p class="caps">vCenter</p>
         <h2 class="detail-title">${escapeHtml(vc.name)}</h2>
-        <p class="detail-meta">${escapeHtml(vc.url)}</p>
-        <p class="detail-meta">${escapeHtml(vc.datacenter)} / ${escapeHtml(dsLabel(vc.datastore))} · ${escapeHtml(vc.username)}${vc.insecure ? " · insecure" : ""}</p>
-        ${vc.folder ? `<p class="detail-meta">Folder · ${escapeHtml(vc.folder)} <span class="pill-tag">recursive</span></p>` : `<p class="detail-meta">Folder · <em>not set</em> (set GOVC_FOLDER to discover VMs)</p>`}
-        <p class="detail-meta">ISO folder · ${escapeHtml(vc.isoFolder || "rf2vc/isos")}</p>
-        ${vc.notes ? `<p class="detail-meta">${escapeHtml(vc.notes)}</p>` : ""}
-        <div class="health-row" id="healthRow">
-          ${lightHTML("yellow", "Connection…")}
-          ${lightHTML("yellow", "ISO cache…")}
+        <p class="detail-url">${escapeHtml(vc.url)}</p>
+        <dl class="field-grid">
+          <div class="field-row"><dt>Datacenter</dt><dd>${escapeHtml(vc.datacenter || "—")}</dd></div>
+          <div class="field-row"><dt>Datastore</dt><dd>${escapeHtml(dsLabel(vc.datastore))}</dd></div>
+          <div class="field-row"><dt>Username</dt><dd>${escapeHtml(vc.username || "—")}${vc.insecure ? ' <span class="pill-tag">insecure</span>' : ""}</dd></div>
+          <div class="field-row"><dt>VM folder</dt><dd>${vc.folder ? `${escapeHtml(vc.folder)} <span class="pill-tag">recursive</span>` : "<em>not set</em>"}</dd></div>
+          <div class="field-row"><dt>ISO folder</dt><dd>${escapeHtml(vc.isoFolder || "rf2vc/isos")}</dd></div>
+          ${notes && !notesDup ? `<div class="field-row"><dt>Notes</dt><dd>${escapeHtml(notes)}</dd></div>` : ""}
+        </dl>
+        <div class="health-block">
+          <div class="health-row" id="healthRow">
+            ${lightHTML("yellow", "Connection…")}
+            ${lightHTML("yellow", "ISO cache…")}
+          </div>
+          <ul class="health-checks" id="healthChecks">
+            <li class="health-check skip"><span class="mark">…</span><span class="name">Probing…</span></li>
+          </ul>
+          <p class="msg" id="vcTestMsg"></p>
         </div>
-        <p class="detail-meta" id="healthDetail"></p>
-        <p class="msg" id="vcTestMsg"></p>
       </div>
       <div class="detail-actions">
         <label class="dry-toggle sm" title="Fake outbound mutations for this vCenter only">
@@ -449,6 +474,7 @@ function renderUUIDRows(vc, rows) {
         <span class="uuid-short" title="${escapeHtml(m.uuid)}">${escapeHtml(shortUuid)}</span>
       </button>
       <div class="uuid-actions">${actions}</div>
+      <p class="msg uuid-row-msg" data-row-msg="${escapeHtml(m.uuid)}"></p>
       <div class="uuid-details hidden" data-uuid-details="${escapeHtml(m.uuid)}">
         <div class="detail-grid">
           <span class="k">BIOS UUID</span><code class="v">${escapeHtml(m.uuid)}</code>
@@ -457,7 +483,6 @@ function renderUUIDRows(vc, rows) {
           ${m.notes ? `<span class="k">Notes</span><span class="v">${escapeHtml(m.notes)}</span>` : ""}
           <span class="k">CDROM</span><span class="v" data-cdrom="${escapeHtml(m.uuid)}">—</span>
         </div>
-        <p class="msg" data-row-msg="${escapeHtml(m.uuid)}"></p>
       </div>
     </div>`;
   }).join("");
@@ -503,7 +528,6 @@ function applyUUIDStatus(uuid, st) {
   if (pathEl) {
     if (st.path) pathEl.textContent = st.path;
     else if (st.found && !pathEl.textContent) pathEl.textContent = "—";
-    // Never overwrite Path with ServerFaultCode — keep folder-scan path if present.
   }
   const cdEl = document.querySelector(`[data-cdrom="${CSS.escape(uuid)}"]`);
   if (cdEl && st.cdromIso !== undefined) {
@@ -513,9 +537,20 @@ function applyUUIDStatus(uuid, st) {
   const offBtn = document.querySelector(`[data-uuid-off="${CSS.escape(uuid)}"]`);
   if (onBtn) onBtn.disabled = !(st.found && st.powerState === "Off");
   if (offBtn) offBtn.disabled = !(st.found && st.powerState === "On");
-  const msg = document.querySelector(`[data-row-msg="${CSS.escape(uuid)}"]`);
-  if (msg && st.error) setMsg(msg, st.error, false);
-  else if (msg) setMsg(msg, "", null);
+}
+
+function rowMsg(uuid) {
+  return document.querySelector(`[data-row-msg="${CSS.escape(uuid)}"]`);
+}
+
+function expandUUIDRow(uuid) {
+  const row = document.querySelector(`[data-uuid-row="${CSS.escape(uuid)}"]`);
+  const details = document.querySelector(`[data-uuid-details="${CSS.escape(uuid)}"]`);
+  const btn = row?.querySelector("[data-toggle-uuid]");
+  if (!row || !details || !btn) return;
+  details.classList.remove("hidden");
+  row.classList.add("open");
+  btn.setAttribute("aria-expanded", "true");
 }
 
 async function loadUUIDStatus(uuid) {
@@ -525,35 +560,42 @@ async function loadUUIDStatus(uuid) {
     return st;
   } catch (err) {
     applyUUIDStatus(uuid, { light: "red", found: false, error: err.message });
-    return null;
+    return { found: false, error: err.message, light: "red" };
   }
 }
 
-async function loadAllUUIDStatus(rows) {
-  await Promise.all((rows || []).map(m => loadUUIDStatus(m.uuid)));
+function healthCheckHTML(ok, skip, name, detail) {
+  const tone = skip ? "skip" : (ok ? "ok" : "err");
+  const mark = skip ? "—" : (ok ? "✓" : "✗");
+  return `<li class="health-check ${tone}"><span class="mark">${mark}</span><span class="name">${escapeHtml(name)}</span><span class="detail">${escapeHtml(detail || "")}</span></li>`;
 }
 
 async function loadHealth(vcId) {
   const row = $("#healthRow");
-  const detail = $("#healthDetail");
+  const checks = $("#healthChecks");
   if (!row) return;
   try {
     const h = await api(`/api/v1/vcenters/${vcId}/health`);
     row.innerHTML =
       lightHTML(h.connection, "Connection") +
       lightHTML(h.isoCache, "ISO cache");
-    if (detail) {
-      const parts = [h.connectionDetail, h.isoCacheDetail].filter(Boolean);
-      // Avoid "datastore not set · datastore not set …" when both lines overlap.
-      const uniq = [];
-      for (const p of parts) {
-        if (!uniq.some(u => u.includes(p) || p.includes(u.split(" · ").pop()))) uniq.push(p);
-      }
-      detail.textContent = uniq.join(" · ");
+    if (checks) {
+      const connOk = h.connection === "green";
+      const connWarn = h.connection === "yellow";
+      const isoOk = h.isoCache === "green";
+      const isoWarn = h.isoCache === "yellow";
+      const folderSet = !!(h.folderPath || h.folderOk);
+      checks.innerHTML =
+        healthCheckHTML(connOk || connWarn, false, "Login / datacenter", h.connectionDetail || h.connection) +
+        healthCheckHTML(!!h.folderOk, !folderSet && !h.folderPath, "VM folder",
+          h.folderPath ? (h.folderOk ? h.folderPath : (h.connectionDetail || "folder issue")) : "not set") +
+        healthCheckHTML(isoOk || isoWarn, false, "ISO / datastore", h.isoCacheDetail || h.isoCache);
     }
   } catch (err) {
     row.innerHTML = lightHTML("red", "Connection") + lightHTML("red", "ISO cache");
-    if (detail) detail.textContent = err.message;
+    if (checks) {
+      checks.innerHTML = healthCheckHTML(false, false, "Health", err.message);
+    }
   }
 }
 
@@ -700,6 +742,14 @@ document.querySelectorAll("[data-view]").forEach(btn => {
   btn.addEventListener("click", () => setPageView(btn.getAttribute("data-view")));
 });
 
+document.querySelectorAll("[data-activity-tab]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    setActivityTab(btn.getAttribute("data-activity-tab"));
+    // Ensure the newly visible pane has content
+    refreshActivity(false);
+  });
+});
+
 async function onDryRunToggle(e) {
   const on = e.target.checked;
   try {
@@ -797,6 +847,8 @@ $("#detailPane").addEventListener("click", async (e) => {
     await reload(ui?.id);
   }
   if (bindFolder && ui?.id) {
+    const msg = rowMsg(bindFolder);
+    setMsg(msg, "Binding…", null);
     try {
       await api("/api/v1/mappings", {
         method: "POST",
@@ -806,9 +858,14 @@ $("#detailPane").addEventListener("click", async (e) => {
           name: bindName || "",
         }),
       });
+      setMsg(msg, "Bound — UUID mapped for Redfish", true);
       await reload(ui.id);
+      // After reload, leave a brief success note on the bound row if still present.
+      const after = rowMsg(bindFolder);
+      if (after) setMsg(after, "Bound", true);
     } catch (err) {
-      setMsg(document.querySelector(`[data-row-msg="${CSS.escape(bindFolder)}"]`), err.message, false);
+      expandUUIDRow(bindFolder);
+      setMsg(msg, err.message, false);
     }
   }
   if (refreshIso) await loadISOStatus(refreshIso);
@@ -833,9 +890,19 @@ $("#detailPane").addEventListener("click", async (e) => {
     }
   }
   if (uuidStatus) {
+    expandUUIDRow(uuidStatus);
+    const msg = rowMsg(uuidStatus);
+    setMsg(msg, "Probing vSphere…", null);
     const st = await loadUUIDStatus(uuidStatus);
-    const msg = document.querySelector(`[data-row-msg="${CSS.escape(uuidStatus)}"]`);
-    if (st?.found) setMsg(msg, `${st.powerState || "?"} · ${st.name || ""}`, true);
+    if (!st) {
+      setMsg(msg, "status unavailable", false);
+    } else if (st.found && st.powerState) {
+      setMsg(msg, `${st.powerState} · ${st.name || "VM"}${st.error ? " · " + st.error : ""}`, !st.error || st.light !== "red");
+    } else if (st.found) {
+      setMsg(msg, st.error || "found (limited props)", st.error ? false : true);
+    } else {
+      setMsg(msg, st.error || "not found", false);
+    }
   }
   if (uuidOn) {
     try {
@@ -844,8 +911,9 @@ $("#detailPane").addEventListener("click", async (e) => {
         body: JSON.stringify({ resetType: "On" }),
       });
       if (res.status) applyUUIDStatus(uuidOn, res.status);
+      setMsg(rowMsg(uuidOn), res.dryRun ? "dry-run: power on not sent" : "power on requested", true);
     } catch (err) {
-      setMsg(document.querySelector(`[data-row-msg="${CSS.escape(uuidOn)}"]`), err.message, false);
+      setMsg(rowMsg(uuidOn), err.message, false);
     }
   }
   if (uuidOff) {
@@ -855,15 +923,17 @@ $("#detailPane").addEventListener("click", async (e) => {
         body: JSON.stringify({ resetType: "ForceOff" }),
       });
       if (res.status) applyUUIDStatus(uuidOff, res.status);
+      setMsg(rowMsg(uuidOff), res.dryRun ? "dry-run: power off not sent" : "power off requested", true);
     } catch (err) {
-      setMsg(document.querySelector(`[data-row-msg="${CSS.escape(uuidOff)}"]`), err.message, false);
+      setMsg(rowMsg(uuidOff), err.message, false);
     }
   }
   if (uuidIso) {
+    expandUUIDRow(uuidIso);
     const st = await loadUUIDStatus(uuidIso);
-    const msg = document.querySelector(`[data-row-msg="${CSS.escape(uuidIso)}"]`);
+    const msg = rowMsg(uuidIso);
     if (st?.cdromIso) setMsg(msg, `CDROM · ${st.cdromIso}`, true);
-    else if (st?.found) setMsg(msg, "CDROM empty / passthrough", true);
+    else if (st?.found) setMsg(msg, st.error || "CDROM empty / passthrough", st.error ? false : true);
     else setMsg(msg, st?.error || "unavailable", false);
   }
 });

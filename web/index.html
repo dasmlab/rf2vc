@@ -73,29 +73,44 @@
           <button type="button" class="pill ghost sm" id="btnClearActivityHint" title="Logs are in-memory; restart clears">Live · polls 2s</button>
         </div>
       </div>
-      <div class="activity-grid">
-        <article class="shell activity-pane" data-channel="inbound">
-          <header class="activity-pane-head">
-            <h3>Inbound</h3>
-            <p>ACM / BMH → Redfish</p>
-          </header>
-          <div class="activity-log" id="logInbound"></div>
-        </article>
-        <article class="shell activity-pane" data-channel="runtime">
-          <header class="activity-pane-head">
-            <h3>Runtime</h3>
-            <p>Housekeeping · scans · health</p>
-          </header>
-          <div class="activity-log" id="logRuntime"></div>
-        </article>
-        <article class="shell activity-pane" data-channel="outbound">
-          <header class="activity-pane-head">
-            <h3>Outbound</h3>
-            <p>rf2vc → vSphere</p>
-          </header>
-          <div class="activity-log" id="logOutbound"></div>
-        </article>
+      <div class="activity-tabs shell" role="tablist" aria-label="Activity channels">
+        <button type="button" class="activity-tab active" data-activity-tab="inbound" role="tab" aria-selected="true">
+          Inbound <span class="tab-hint">ACM / BMH</span>
+        </button>
+        <button type="button" class="activity-tab" data-activity-tab="runtime" role="tab" aria-selected="false">
+          Runtime <span class="tab-hint">scans · health</span>
+        </button>
+        <button type="button" class="activity-tab" data-activity-tab="outbound" role="tab" aria-selected="false">
+          Outbound <span class="tab-hint">vSphere</span>
+        </button>
       </div>
+      <article class="shell activity-pane activity-pane-full" data-channel="inbound" id="paneInbound">
+        <header class="activity-pane-head">
+          <div>
+            <h3>Inbound</h3>
+            <p>ACM / BMH → Redfish requests</p>
+          </div>
+        </header>
+        <div class="activity-log" id="logInbound"></div>
+      </article>
+      <article class="shell activity-pane activity-pane-full hidden" data-channel="runtime" id="paneRuntime">
+        <header class="activity-pane-head">
+          <div>
+            <h3>Runtime</h3>
+            <p>Housekeeping · folder scans · health</p>
+          </div>
+        </header>
+        <div class="activity-log" id="logRuntime"></div>
+      </article>
+      <article class="shell activity-pane activity-pane-full hidden" data-channel="outbound" id="paneOutbound">
+        <header class="activity-pane-head">
+          <div>
+            <h3>Outbound</h3>
+            <p>rf2vc → vSphere (or dry-run)</p>
+          </div>
+        </header>
+        <div class="activity-log" id="logOutbound"></div>
+      </article>
     </section>
   </div>
 
