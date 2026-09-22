@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -456,7 +457,7 @@ func (c *Client) powerOn(ctx context.Context, vm *object.VirtualMachine) error {
 	if err != nil {
 		return err
 	}
-	return task.Wait(ctx)
+	return c.waitTask(ctx, vm, task)
 }
 
 func (c *Client) powerOff(ctx context.Context, vm *object.VirtualMachine) error {
@@ -467,11 +468,94 @@ func (c *Client) powerOff(ctx context.Context, vm *object.VirtualMachine) error 
 	if state == types.VirtualMachinePowerStatePoweredOff {
 		return nil
 	}
+	_ = c.ensureMsgAutoAnswer(ctx, vm)
+	_ = c.answerPendingQuestions(ctx, vm)
 	task, err := vm.PowerOff(ctx)
 	if err != nil {
 		return err
 	}
+	return c.waitTask(ctx, vm, task)
+}
+
+// ensureMsgAutoAnswer makes vCenter auto-accept CD-ROM lock / similar prompts
+// so BMH teardown (eject + power off) does not hang on "Answer Question".
+func (c *Client) ensureMsgAutoAnswer(ctx context.Context, vm *object.VirtualMachine) error {
+	spec := types.VirtualMachineConfigSpec{
+		ExtraConfig: []types.BaseOptionValue{
+			&types.OptionValue{Key: "msg.autoAnswer", Value: "TRUE"},
+		},
+	}
+	task, err := vm.Reconfigure(ctx, spec)
+	if err != nil {
+		return err
+	}
 	return task.Wait(ctx)
+}
+
+func (c *Client) answerPendingQuestions(ctx context.Context, vm *object.VirtualMachine) error {
+	var mvm mo.VirtualMachine
+	if err := vm.Properties(ctx, vm.Reference(), []string{"runtime.question"}, &mvm); err != nil {
+		return err
+	}
+	q := mvm.Runtime.Question
+	if q == nil {
+		return nil
+	}
+	answer := questionYesKey(q)
+	log.Printf("answering VM question id=%s text=%q answer=%s", q.Id, truncate(q.Text, 80), answer)
+	return vm.Answer(ctx, q.Id, answer)
+}
+
+func questionYesKey(q *types.VirtualMachineQuestionInfo) string {
+	if q == nil || len(q.Choice.ChoiceInfo) == 0 {
+		return "0"
+	}
+	for _, ci := range q.Choice.ChoiceInfo {
+		ed := ci.GetElementDescription()
+		if ed == nil {
+			continue
+		}
+		label := strings.ToLower(strings.TrimSpace(ed.Label))
+		if label == "yes" || strings.HasPrefix(label, "yes") {
+			return ed.Key
+		}
+	}
+	idx := int(q.Choice.DefaultIndex)
+	if idx < 0 || idx >= len(q.Choice.ChoiceInfo) {
+		idx = 0
+	}
+	if ed := q.Choice.ChoiceInfo[idx].GetElementDescription(); ed != nil && ed.Key != "" {
+		return ed.Key
+	}
+	return "0"
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}
+
+// waitTask waits for a task while auto-answering CD-ROM lock (and similar) questions.
+func (c *Client) waitTask(ctx context.Context, vm *object.VirtualMachine, task *object.Task) error {
+	done := make(chan error, 1)
+	go func() { done <- task.Wait(ctx) }()
+
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case err := <-done:
+			// One last pass in case the question arrived as the task completed.
+			_ = c.answerPendingQuestions(ctx, vm)
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			_ = c.answerPendingQuestions(ctx, vm)
+		}
+	}
 }
 
 // SetBootCDOnce puts CDROM first in the VM boot order (then disks with DeviceKey).
@@ -619,6 +703,9 @@ func (c *Client) downloadISO(ctx context.Context, imageURL string) (string, erro
 }
 
 func (c *Client) attachCDROM(ctx context.Context, vm *object.VirtualMachine, dsISOPath string) error {
+	_ = c.ensureMsgAutoAnswer(ctx, vm)
+	_ = c.answerPendingQuestions(ctx, vm)
+
 	devices, err := vm.Device(ctx)
 	if err != nil {
 		return err
@@ -669,10 +756,13 @@ func (c *Client) attachCDROM(ctx context.Context, vm *object.VirtualMachine, dsI
 	if err != nil {
 		return err
 	}
-	return task.Wait(ctx)
+	return c.waitTask(ctx, vm, task)
 }
 
 func (c *Client) detachCDROM(ctx context.Context, vm *object.VirtualMachine) error {
+	_ = c.ensureMsgAutoAnswer(ctx, vm)
+	_ = c.answerPendingQuestions(ctx, vm)
+
 	devices, err := vm.Device(ctx)
 	if err != nil {
 		return err
@@ -687,10 +777,12 @@ func (c *Client) detachCDROM(ctx context.Context, vm *object.VirtualMachine) err
 			DeviceName: "",
 		},
 	}
-	if cd.Connectable != nil {
-		cd.Connectable.Connected = false
-		cd.Connectable.StartConnected = false
+	if cd.Connectable == nil {
+		cd.Connectable = &types.VirtualDeviceConnectInfo{}
 	}
+	cd.Connectable.Connected = false
+	cd.Connectable.StartConnected = false
+	cd.Connectable.AllowGuestControl = true
 	spec := types.VirtualMachineConfigSpec{
 		DeviceChange: []types.BaseVirtualDeviceConfigSpec{
 			&types.VirtualDeviceConfigSpec{
@@ -703,5 +795,5 @@ func (c *Client) detachCDROM(ctx context.Context, vm *object.VirtualMachine) err
 	if err != nil {
 		return err
 	}
-	return task.Wait(ctx)
+	return c.waitTask(ctx, vm, task)
 }
