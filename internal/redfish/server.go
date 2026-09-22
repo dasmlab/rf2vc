@@ -53,10 +53,22 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	if p == "" {
 		p = "/"
 	}
-	activity.In(r.Method, r.URL.Path, map[string]any{
-		"remote": r.RemoteAddr,
-		"ua":     r.UserAgent(),
-	})
+	// BMH addresses sometimes omit "Systems/":
+	//   redfish-virtualmedia://host/redfish/v1/<uuid>
+	// instead of …/redfish/v1/Systems/<uuid>. Rewrite bare-UUID paths.
+	if rewritten, ok := rewriteBareUUIDPath(p); ok {
+		activity.In(r.Method, r.URL.Path, map[string]any{
+			"remote":   r.RemoteAddr,
+			"ua":       r.UserAgent(),
+			"rewrote":  "/redfish/v1" + rewritten,
+		})
+		p = rewritten
+	} else {
+		activity.In(r.Method, r.URL.Path, map[string]any{
+			"remote": r.RemoteAddr,
+			"ua":     r.UserAgent(),
+		})
+	}
 
 	switch {
 	case p == "/" && r.Method == http.MethodGet:
@@ -120,6 +132,48 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		activity.InErr("not-found", r.URL.Path, nil)
 		http.NotFound(w, r)
 	}
+}
+
+// rewriteBareUUIDPath maps /{uuid}[/…] → /Systems/{uuid}[/…] when the first
+// segment looks like a BIOS UUID (BMH address omitted "Systems/").
+func rewriteBareUUIDPath(p string) (string, bool) {
+	if p == "/" || p == "" {
+		return "", false
+	}
+	rest := strings.TrimPrefix(p, "/")
+	seg, more, hasMore := strings.Cut(rest, "/")
+	if !looksLikeUUID(seg) {
+		return "", false
+	}
+	// Don't steal real top-level collections if someone names a UUID oddly.
+	switch strings.ToLower(seg) {
+	case "systems", "managers", "chassis", "sessionservice", "accountservice", "registries", "taskservice", "eventservice", "updateservice", "jsonschemas", "$metadata":
+		return "", false
+	}
+	if hasMore {
+		return "/Systems/" + seg + "/" + more, true
+	}
+	return "/Systems/" + seg, true
+}
+
+func looksLikeUUID(s string) bool {
+	// Accept standard 8-4-4-4-12 hex form (BIOS UUID).
+	if len(s) != 36 {
+		return false
+	}
+	for i, c := range s {
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func systemIDFrom(p, suffix string) string {
