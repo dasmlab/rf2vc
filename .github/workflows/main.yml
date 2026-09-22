@@ -101,6 +101,9 @@ jobs:
           set -euo pipefail
           chmod +x scripts/ci/resolve-version.sh
           SHA="$(git rev-parse --short HEAD)"
+          # Annotated tags need an identity; fresh DinD runners have none.
+          git config user.name "dasmlab-bot"
+          git config user.email "ci@dasmlab.org"
 
           claimed=""
           for attempt in 1 2 3 4 5 6 7 8; do
