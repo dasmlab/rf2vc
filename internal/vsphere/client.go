@@ -445,6 +445,13 @@ func (c *Client) Reset(ctx context.Context, uuid, resetType string) error {
 }
 
 func (c *Client) powerOn(ctx context.Context, vm *object.VirtualMachine) error {
+	state, err := vm.PowerState(ctx)
+	if err != nil {
+		return err
+	}
+	if state == types.VirtualMachinePowerStatePoweredOn {
+		return nil
+	}
 	task, err := vm.PowerOn(ctx)
 	if err != nil {
 		return err
@@ -467,24 +474,28 @@ func (c *Client) powerOff(ctx context.Context, vm *object.VirtualMachine) error 
 	return task.Wait(ctx)
 }
 
+// SetBootCDOnce puts CDROM first in the VM boot order (then disks with DeviceKey).
+// Bare BootableDiskDevice{} without DeviceKey is rejected by vCenter as
+// configSpec.bootOptions.bootOrder — use devices.BootOrder like govc device.boot.
 func (c *Client) SetBootCDOnce(ctx context.Context, uuid string) error {
 	vm, err := c.findByUUID(ctx, uuid)
 	if err != nil {
 		return err
 	}
-	spec := types.VirtualMachineConfigSpec{
-		BootOptions: &types.VirtualMachineBootOptions{
-			BootOrder: []types.BaseVirtualMachineBootOptionsBootableDevice{
-				&types.VirtualMachineBootOptionsBootableCdromDevice{},
-				&types.VirtualMachineBootOptionsBootableDiskDevice{},
-			},
-		},
-	}
-	task, err := vm.Reconfigure(ctx, spec)
+	devices, err := vm.Device(ctx)
 	if err != nil {
 		return err
 	}
-	return task.Wait(ctx)
+	order := devices.BootOrder([]string{"cdrom", "disk"})
+	if len(order) == 0 {
+		// No CDROM device yet — still request CD so a later attach can boot.
+		order = []types.BaseVirtualMachineBootOptionsBootableDevice{
+			&types.VirtualMachineBootOptionsBootableCdromDevice{},
+		}
+	}
+	return vm.SetBootOptions(ctx, &types.VirtualMachineBootOptions{
+		BootOrder: order,
+	})
 }
 
 type MediaStatus struct {
