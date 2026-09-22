@@ -421,10 +421,6 @@ func (c *Client) uploadISOIfNeeded(ctx context.Context, localPath, dsPath string
 // putISO uploads via an ESXi host ticket first (reliable for NFS/Qumulo), then
 // falls back to a vCenter /folder/ PUT using the exact ticket URL.
 func (c *Client) putISO(ctx context.Context, localPath, dsPath string, size int64) error {
-	if strings.Contains(dsPath, "Provisionning") {
-		log.Printf("WARNING: ISO path contains typo Provisionning (double n): %s — UI folder is often OCP-Provisioning", dsPath)
-	}
-
 	if err := c.putISOViaHost(ctx, localPath, dsPath, size); err == nil {
 		return nil
 	} else {
