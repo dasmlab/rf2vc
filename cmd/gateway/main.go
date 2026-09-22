@@ -122,6 +122,12 @@ func basicAuth(user, pass string, next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// Redfish 7.2.3: ServiceRoot (/redfish/v1/) and /redfish must not require auth.
+		// Ironic/sushy probes these with no Authorization (python-requests) first.
+		if r.Method == http.MethodGet && isPublicRedfishRoot(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		u, p, ok := r.BasicAuth()
 		if !ok || u != user || p != pass {
 			reason := "missing"
@@ -148,4 +154,14 @@ func basicAuth(user, pass string, next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isPublicRedfishRoot matches the Redfish-mandated unauthenticated discovery paths.
+func isPublicRedfishRoot(path string) bool {
+	switch strings.TrimSuffix(path, "/") {
+	case "/redfish", "/redfish/v1":
+		return true
+	default:
+		return false
+	}
 }
