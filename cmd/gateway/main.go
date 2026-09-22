@@ -124,6 +124,24 @@ func basicAuth(user, pass string, next http.Handler) http.Handler {
 		}
 		u, p, ok := r.BasicAuth()
 		if !ok || u != user || p != pass {
+			reason := "missing"
+			if ok {
+				if u != user {
+					reason = "bad-user"
+				} else {
+					reason = "bad-password"
+				}
+			}
+			// Log before rejecting — BMH 401s previously looked like "no traffic"
+			// because inbound activity only ran after auth succeeded.
+			activity.InErr("auth", "401 Unauthorized", map[string]any{
+				"method": r.Method,
+				"path":   r.URL.Path,
+				"remote": r.RemoteAddr,
+				"ua":     r.UserAgent(),
+				"reason": reason,
+				"user":   u, // attempted username only (never password)
+			})
 			w.Header().Set("WWW-Authenticate", `Basic realm="rf2vc"`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
