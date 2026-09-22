@@ -2,6 +2,7 @@ package vsphere
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"log"
@@ -574,7 +575,18 @@ func (c *Client) downloadISO(ctx context.Context, imageURL string) (string, erro
 	if err != nil {
 		return "", err
 	}
-	httpClient := &http.Client{Timeout: 30 * time.Minute}
+	// Ironic hands us its conductor image-cache URL (often https://<provisioning-IP>:6183/…).
+	// That cert is self-signed and almost never has an IP SAN — same as BMH
+	// disableCertificateVerification. Skip verify for ISO fetch only.
+	httpClient := &http.Client{
+		Timeout: 30 * time.Minute,
+		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true, //nolint:gosec // Ironic/assisted image URLs
+			},
+		},
+	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", err
