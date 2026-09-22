@@ -919,6 +919,7 @@ $("#detailPane").addEventListener("click", async (e) => {
     }
   }
   if (uuidOff) {
+    if (!confirm("Power off this VM? Guests will lose power immediately (ForceOff).")) return;
     try {
       const res = await api(`/api/v1/mappings/${encodeURIComponent(uuidOff)}/power`, {
         method: "POST",
