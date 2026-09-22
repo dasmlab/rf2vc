@@ -5,25 +5,44 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/vmware/govmomi/object"
+	"github.com/vmware/govmomi/session"
 	"github.com/vmware/govmomi/vim25/soap"
 	"github.com/vmware/govmomi/vim25/types"
 )
 
-// ISOFileName hashes the source URL to a stable datastore/local filename.
+// ISOFileName hashes the source URL to a stable local-cache filename.
 func ISOFileName(imageURL string) string {
 	sum := sha256.Sum256([]byte(imageURL))
 	return hex.EncodeToString(sum[:8]) + ".iso"
 }
 
-func (c *Client) isoDSPath(imageURL string) string {
-	return path.Join(c.ep.ISOFolder, ISOFileName(imageURL))
+// contentISOName hashes file bytes so identical Ironic per-node cache URLs
+// (same assisted ISO, different boot-*.iso URL) share one datastore object.
+func contentISOName(localPath string) (string, error) {
+	f, err := os.Open(localPath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)[:8]) + ".iso", nil
+}
+
+func (c *Client) isoDSPath(fileName string) string {
+	return path.Join(strings.Trim(c.ep.ISOFolder, "/"), fileName)
 }
 
 func (c *Client) datastoreFileExists(ctx context.Context, dsPath string) (bool, int64, error) {
@@ -107,9 +126,25 @@ func (c *Client) ensureISOFolder(ctx context.Context) error {
 		}
 		dsPath := c.ds.Path(accum)
 		err := fm.MakeDirectory(ctx, dsPath, c.dc, true)
-		if err != nil && !strings.Contains(strings.ToLower(err.Error()), "already exists") {
-			log.Printf("ensureISOFolder %s: %v", dsPath, err)
+		if err == nil {
+			continue
 		}
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "already exists") || strings.Contains(msg, "file already exists") {
+			continue
+		}
+		return fmt.Errorf("mkdir %s: %w", dsPath, err)
+	}
+	// Confirm leaf folder is visible to the browser (catches dcPath / DS mismatches early).
+	if _, err := c.ds.Stat(ctx, folder); err != nil {
+		if _, ok := err.(object.DatastoreNoSuchDirectoryError); ok {
+			return fmt.Errorf("iso folder %s missing after mkdir: %w", c.ds.Path(folder), err)
+		}
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "not found") || strings.Contains(msg, "no such") {
+			return fmt.Errorf("iso folder %s missing after mkdir: %w", c.ds.Path(folder), err)
+		}
+		// Stat of a directory sometimes returns FileInfo quirks — non-not-found is OK.
 	}
 	return nil
 }
@@ -235,6 +270,11 @@ func (c *Client) ISOCacheStatus(ctx context.Context) ISOCacheStatus {
 	return out
 }
 
+type uploadCall struct {
+	done chan struct{}
+	err  error
+}
+
 func (c *Client) uploadISOIfNeeded(ctx context.Context, localPath, dsPath string) (uploaded bool, err error) {
 	exists, size, err := c.datastoreFileExists(ctx, dsPath)
 	if err != nil {
@@ -244,13 +284,128 @@ func (c *Client) uploadISOIfNeeded(ctx context.Context, localPath, dsPath string
 		log.Printf("iso already on datastore %s (%d bytes) — skip upload", c.ds.Path(dsPath), size)
 		return false, nil
 	}
+
+	// Single-flight identical datastore targets (Ironic retries × N BMHs).
+	c.uploadMu.Lock()
+	if c.uploadInFlight == nil {
+		c.uploadInFlight = map[string]*uploadCall{}
+	}
+	if call, ok := c.uploadInFlight[dsPath]; ok {
+		c.uploadMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-call.done:
+			if call.err != nil {
+				return false, call.err
+			}
+			return false, nil
+		}
+	}
+	call := &uploadCall{done: make(chan struct{})}
+	c.uploadInFlight[dsPath] = call
+	c.uploadMu.Unlock()
+
+	defer func() {
+		call.err = err
+		close(call.done)
+		c.uploadMu.Lock()
+		delete(c.uploadInFlight, dsPath)
+		c.uploadMu.Unlock()
+	}()
+
+	// Serialize PUTs against vCenter — parallel uploads to Qumulo were returning 503.
+	c.uploadSerial.Lock()
+	defer c.uploadSerial.Unlock()
+
+	// Re-check under the serial lock; another host may have finished.
+	exists, size, err = c.datastoreFileExists(ctx, dsPath)
+	if err != nil {
+		return false, err
+	}
+	if exists {
+		log.Printf("iso already on datastore %s (%d bytes) — skip upload", c.ds.Path(dsPath), size)
+		return false, nil
+	}
+
 	if err := c.ensureISOFolder(ctx); err != nil {
 		return false, fmt.Errorf("ensure iso folder: %w", err)
 	}
-	log.Printf("uploading iso to datastore %s", c.ds.Path(dsPath))
-	p := soap.DefaultUpload
-	if err := c.ds.UploadFile(ctx, localPath, dsPath, &p); err != nil {
+
+	st, err := os.Stat(localPath)
+	if err != nil {
 		return false, err
 	}
-	return true, nil
+	if st.Size() < 1024*1024 {
+		return false, fmt.Errorf("local iso %s is only %d bytes (not a real ISO; re-download)", localPath, st.Size())
+	}
+
+	// Ensure dcPath/dsName are populated for /folder/ URLs (404 when empty/wrong).
+	if c.ds.DatacenterPath == "" || c.ds.InventoryPath == "" {
+		if ferr := c.ds.FindInventoryPath(ctx); ferr != nil {
+			log.Printf("FindInventoryPath: %v", ferr)
+		}
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= 4; attempt++ {
+		lastErr = c.putISO(ctx, localPath, dsPath, st.Size())
+		if lastErr == nil {
+			// Confirm the file landed (avoids "success" that never appears in the UI).
+			ok, got, serr := c.datastoreFileExists(ctx, dsPath)
+			if serr != nil {
+				return true, fmt.Errorf("upload ok but stat failed: %w", serr)
+			}
+			if !ok || got == 0 {
+				return true, fmt.Errorf("upload reported ok but %s still missing on datastore", c.ds.Path(dsPath))
+			}
+			log.Printf("uploaded iso %s (%d bytes)", c.ds.Path(dsPath), got)
+			return true, nil
+		}
+		msg := strings.ToLower(lastErr.Error())
+		retryable := strings.Contains(msg, "503") || strings.Contains(msg, "502") ||
+			strings.Contains(msg, "unavailable") || strings.Contains(msg, "timeout") ||
+			strings.Contains(msg, "404")
+		if !retryable || attempt == 4 {
+			break
+		}
+		backoff := time.Duration(attempt) * 2 * time.Second
+		log.Printf("iso upload attempt %d failed (%v); retry in %s", attempt, lastErr, backoff)
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-time.After(backoff):
+		}
+	}
+	return false, lastErr
+}
+
+// putISO PUTs a local file to the datastore via vCenter /folder/ with an
+// explicit vmware_cgi_ticket. Without the ticket, some vCenters answer 404 for
+// unauthenticated /folder/ PUTs even though SOAP session cookies work for /sdk.
+func (c *Client) putISO(ctx context.Context, localPath, dsPath string, size int64) error {
+	u := c.ds.NewURL(dsPath)
+	log.Printf("uploading iso to datastore %s (%d bytes) dcPath=%q dsName=%q url=%s",
+		c.ds.Path(dsPath), size, c.ds.DatacenterPath, c.ds.Name(), u.Redacted())
+
+	sm := session.NewManager(c.client.Client)
+	ticket, err := sm.AcquireGenericServiceTicket(ctx, &types.SessionManagerHttpServiceRequestSpec{
+		Url:    u.String(),
+		Method: string(types.SessionManagerHttpServiceRequestSpecMethodHttpPut),
+	})
+	if err != nil {
+		return fmt.Errorf("acquire upload ticket: %w", err)
+	}
+
+	p := soap.DefaultUpload
+	p.Ticket = &http.Cookie{
+		Name:  "vmware_cgi_ticket",
+		Value: ticket.Id,
+	}
+	p.Close = true
+
+	if err := c.ds.UploadFile(ctx, localPath, dsPath, &p); err != nil {
+		return err
+	}
+	return nil
 }

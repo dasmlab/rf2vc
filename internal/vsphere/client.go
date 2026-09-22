@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -48,9 +47,13 @@ type Client struct {
 	mu       sync.Mutex
 	mediaISO map[string]string
 
-	uuidMu           sync.Mutex
-	uuidCache        map[string]uuidCacheEntry
+	uuidMu            sync.Mutex
+	uuidCache         map[string]uuidCacheEntry
 	searchIndexDenied bool // FindByUuid permanently denied for this SA
+
+	uploadSerial   sync.Mutex // serialize datastore PUTs (avoid VC/Qumulo 503 storms)
+	uploadMu       sync.Mutex
+	uploadInFlight map[string]*uploadCall
 }
 
 type uuidCacheEntry struct {
@@ -509,29 +512,18 @@ func (c *Client) InsertMedia(ctx context.Context, uuid, imageURL string) error {
 		return fmt.Errorf("system %s not allowed", uuid)
 	}
 
-	dsPath := c.isoDSPath(imageURL)
-
-	// Fast path: ISO already staged on datastore — attach without download/upload.
-	if exists, size, err := c.datastoreFileExists(ctx, dsPath); err != nil {
-		return fmt.Errorf("stat datastore iso: %w", err)
-	} else if exists {
-		log.Printf("InsertMedia system=%s reuse datastore iso %s (%d bytes)", uuid, dsPath, size)
-		if err := c.attachCDROM(ctx, vm, dsPath); err != nil {
-			return fmt.Errorf("attach cdrom: %w", err)
-		}
-		if err := c.SetBootCDOnce(ctx, uuid); err != nil {
-			return fmt.Errorf("set boot cd: %w", err)
-		}
-		c.mu.Lock()
-		c.mediaISO[strings.ToLower(uuid)] = imageURL
-		c.mu.Unlock()
-		return nil
-	}
-
 	local, err := c.downloadISO(ctx, imageURL)
 	if err != nil {
 		return fmt.Errorf("download iso: %w", err)
 	}
+
+	// Content-hash so all BMHs sharing the same assisted ISO reuse one datastore file
+	// (Ironic hands out distinct https://…:6183/redfish/boot-<node>.iso URLs).
+	contentName, err := contentISOName(local)
+	if err != nil {
+		return fmt.Errorf("hash iso: %w", err)
+	}
+	dsPath := c.isoDSPath(contentName)
 
 	if _, err := c.uploadISOIfNeeded(ctx, local, dsPath); err != nil {
 		return fmt.Errorf("upload iso: %w", err)
