@@ -92,7 +92,12 @@ func (c *Client) datastoreDirExists(ctx context.Context, dsPath string) (bool, e
 		return false, err
 	}
 	spec := types.HostDatastoreBrowserSearchSpec{
-		Details: &types.FileQueryFlags{FileType: true, FileSize: true},
+		Details: &types.FileQueryFlags{
+			FileType:     true,
+			FileSize:     true,
+			Modification: true,
+			FileOwner:    types.NewBool(false), // required by VC SOAP (omitempty nil → fault)
+		},
 	}
 	task, err := browser.SearchDatastore(ctx, c.ds.Path(dsPath), &spec)
 	if err != nil {
@@ -267,6 +272,7 @@ func (c *Client) ISOCacheStatus(ctx context.Context) ISOCacheStatus {
 				FileType:     true,
 				FileSize:     true,
 				Modification: true,
+				FileOwner:    types.NewBool(false), // required by VC SOAP
 			},
 			MatchPattern: []string{"*.iso"},
 		}
