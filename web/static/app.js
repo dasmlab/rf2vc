@@ -432,13 +432,13 @@ function renderUUIDRows(vc, rows) {
     const shortUuid = m.uuid.length > 13 ? `${m.uuid.slice(0, 8)}…` : m.uuid;
     const actions = m.bound
       ? `
+        <button type="button" class="pill danger sm" data-unmap="${escapeHtml(m.uuid)}" title="Remove UUID mapping (does not delete the VM)">Unbind</button>
         <button type="button" class="pill ghost sm" data-uuid-status="${escapeHtml(m.uuid)}">Status</button>
         <button type="button" class="pill ghost sm" data-uuid-on="${escapeHtml(m.uuid)}" disabled>Power on</button>
         <button type="button" class="pill ghost sm" data-uuid-off="${escapeHtml(m.uuid)}" disabled>Power off</button>
-        <button type="button" class="pill ghost sm" data-uuid-iso="${escapeHtml(m.uuid)}">ISO map</button>
-        <button type="button" class="pill danger sm" data-unmap="${escapeHtml(m.uuid)}">Remove</button>`
+        <button type="button" class="pill ghost sm" data-uuid-iso="${escapeHtml(m.uuid)}">ISO map</button>`
       : `
-        <button type="button" class="pill primary sm" data-bind-folder="${escapeHtml(m.uuid)}" data-bind-name="${escapeHtml(m.name)}">Bind</button>`;
+        <button type="button" class="pill primary sm" data-bind-folder="${escapeHtml(m.uuid)}" data-bind-name="${escapeHtml(m.name)}" title="Map this BIOS UUID so ACM/BMH Redfish calls control this VM">Bind</button>`;
     return `
     <div class="uuid-row" data-uuid-row="${escapeHtml(m.uuid)}">
       <button type="button" class="uuid-summary" data-toggle-uuid="${escapeHtml(m.uuid)}" aria-expanded="false">
@@ -448,7 +448,7 @@ function renderUUIDRows(vc, rows) {
         <span class="uuid-tags">${tags.join("")}</span>
         <span class="uuid-short" title="${escapeHtml(m.uuid)}">${escapeHtml(shortUuid)}</span>
       </button>
-      <div class="uuid-actions">${m.bound ? "" : actions}</div>
+      <div class="uuid-actions">${actions}</div>
       <div class="uuid-details hidden" data-uuid-details="${escapeHtml(m.uuid)}">
         <div class="detail-grid">
           <span class="k">BIOS UUID</span><code class="v">${escapeHtml(m.uuid)}</code>
@@ -457,7 +457,6 @@ function renderUUIDRows(vc, rows) {
           ${m.notes ? `<span class="k">Notes</span><span class="v">${escapeHtml(m.notes)}</span>` : ""}
           <span class="k">CDROM</span><span class="v" data-cdrom="${escapeHtml(m.uuid)}">—</span>
         </div>
-        ${m.bound ? `<div class="uuid-actions expanded">${actions}</div>` : ""}
         <p class="msg" data-row-msg="${escapeHtml(m.uuid)}"></p>
       </div>
     </div>`;
@@ -502,7 +501,9 @@ function applyUUIDStatus(uuid, st) {
   }
   const pathEl = document.querySelector(`[data-vm-path="${CSS.escape(uuid)}"]`);
   if (pathEl) {
-    pathEl.textContent = st.path || (st.found ? "—" : (st.error || "not found"));
+    if (st.path) pathEl.textContent = st.path;
+    else if (st.found && !pathEl.textContent) pathEl.textContent = "—";
+    // Never overwrite Path with ServerFaultCode — keep folder-scan path if present.
   }
   const cdEl = document.querySelector(`[data-cdrom="${CSS.escape(uuid)}"]`);
   if (cdEl && st.cdromIso !== undefined) {
@@ -513,7 +514,7 @@ function applyUUIDStatus(uuid, st) {
   if (onBtn) onBtn.disabled = !(st.found && st.powerState === "Off");
   if (offBtn) offBtn.disabled = !(st.found && st.powerState === "On");
   const msg = document.querySelector(`[data-row-msg="${CSS.escape(uuid)}"]`);
-  if (msg && st.error && st.light === "yellow") setMsg(msg, st.error, false);
+  if (msg && st.error) setMsg(msg, st.error, false);
   else if (msg) setMsg(msg, "", null);
 }
 

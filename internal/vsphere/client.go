@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dasmlab/rf2vc/internal/activity"
 	"github.com/vmware/govmomi"
 	"github.com/vmware/govmomi/find"
 	"github.com/vmware/govmomi/object"
@@ -177,26 +178,25 @@ func (c *Client) GetSystem(ctx context.Context, uuid string) (*SystemInfo, error
 
 func (c *Client) infoFromVM(ctx context.Context, vm *object.VirtualMachine) (SystemInfo, error) {
 	var m mo.VirtualMachine
-	if err := vm.Properties(ctx, vm.Reference(), []string{"name", "config.uuid", "runtime.powerState", "config.hardware"}, &m); err != nil {
+	// Minimal props first — some service accounts cannot read config.hardware.
+	if err := vm.Properties(ctx, vm.Reference(), []string{"name", "config.uuid", "runtime.powerState"}, &m); err != nil {
 		return SystemInfo{}, err
 	}
 	uuid := ""
 	if m.Config != nil {
 		uuid = m.Config.Uuid
 	}
-	mem := int32(0)
-	cpus := int32(0)
-	if m.Config != nil && m.Config.Hardware.MemoryMB != 0 {
-		mem = m.Config.Hardware.MemoryMB
-		cpus = m.Config.Hardware.NumCPU
-	}
-	return SystemInfo{
+	info := SystemInfo{
 		UUID:       uuid,
 		Name:       m.Name,
 		PowerState: mapPower(m.Runtime.PowerState),
-		MemoryMiB:  mem,
-		CPUs:       cpus,
-	}, nil
+	}
+	var hw mo.VirtualMachine
+	if err := vm.Properties(ctx, vm.Reference(), []string{"config.hardware"}, &hw); err == nil && hw.Config != nil {
+		info.MemoryMiB = hw.Config.Hardware.MemoryMB
+		info.CPUs = hw.Config.Hardware.NumCPU
+	}
+	return info, nil
 }
 
 func mapPower(p types.VirtualMachinePowerState) string {
@@ -255,6 +255,16 @@ func (c *Client) checkFolder(ctx context.Context, vm *object.VirtualMachine) err
 	if pathName == "" {
 		p, err := find.InventoryPath(ctx, c.client.Client, vm.Reference())
 		if err != nil {
+			// Some service accounts can FindByUuid + list folder VMs but cannot
+			// resolve InventoryPath. Soft-skip rather than blocking all Redfish ops.
+			if isPermissionDenied(err) {
+				activity.RunWarn("folder-check", "InventoryPath denied — skipping folder gate", map[string]any{
+					"uuid":   vm.Reference().Value,
+					"folder": folder,
+					"error":  err.Error(),
+				})
+				return nil
+			}
 			return fmt.Errorf("vm path: %w", err)
 		}
 		pathName = p
@@ -266,6 +276,14 @@ func (c *Client) checkFolder(ctx context.Context, vm *object.VirtualMachine) err
 		return nil
 	}
 	return fmt.Errorf("vm %s path %q is outside GOVC_FOLDER %q", vm.Name(), pathName, folder)
+}
+
+func isPermissionDenied(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "permission") && strings.Contains(msg, "denied")
 }
 
 func (c *Client) Reset(ctx context.Context, uuid, resetType string) error {

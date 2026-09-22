@@ -237,6 +237,11 @@ func (c *Client) MappingStatus(ctx context.Context, uuid string) MappingStatus {
 		out.Path = pathName
 	} else if p, err := find.InventoryPath(ctx, c.client.Client, vm.Reference()); err == nil {
 		out.Path = p
+	} else if err != nil && isPermissionDenied(err) {
+		// Path is decorative; don't fail status or paint Path with ServerFaultCode.
+		if out.Error == "" {
+			out.Error = "inventory path: permission denied (VM still usable)"
+		}
 	}
 	switch info.PowerState {
 	case "On":
@@ -249,8 +254,11 @@ func (c *Client) MappingStatus(ctx context.Context, uuid string) MappingStatus {
 	if iso, err := c.cdromISOPath(ctx, vm); err == nil {
 		out.CDROMISO = iso
 	} else if err != nil && !strings.Contains(strings.ToLower(err.Error()), "no cdrom") {
-		// keep power light; attach iso error as soft detail
-		if out.Error == "" {
+		if isPermissionDenied(err) {
+			if out.Error == "" {
+				out.Error = "cdrom: permission denied (need VirtualMachine.Config.Read)"
+			}
+		} else if out.Error == "" {
 			out.Error = "cdrom: " + err.Error()
 		}
 	}
