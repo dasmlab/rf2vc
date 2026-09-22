@@ -531,7 +531,9 @@ function applyUUIDStatus(uuid, st) {
   }
   const cdEl = document.querySelector(`[data-cdrom="${CSS.escape(uuid)}"]`);
   if (cdEl && st.cdromIso !== undefined) {
-    cdEl.textContent = st.cdromIso ? st.cdromIso : (st.found ? "(none / empty)" : "—");
+    cdEl.textContent = st.cdromIso
+      ? st.cdromIso
+      : (st.found ? "(none / empty)" : "—");
   }
   const onBtn = document.querySelector(`[data-uuid-on="${CSS.escape(uuid)}"]`);
   const offBtn = document.querySelector(`[data-uuid-off="${CSS.escape(uuid)}"]`);
@@ -933,7 +935,7 @@ $("#detailPane").addEventListener("click", async (e) => {
     const st = await loadUUIDStatus(uuidIso);
     const msg = rowMsg(uuidIso);
     if (st?.cdromIso) setMsg(msg, `CDROM · ${st.cdromIso}`, true);
-    else if (st?.found) setMsg(msg, st.error || "CDROM empty / passthrough", st.error ? false : true);
+    else if (st?.found) setMsg(msg, st.error || "CDROM empty / no ISO backing", st.error ? false : true);
     else setMsg(msg, st?.error || "unavailable", false);
   }
 });

@@ -6,7 +6,6 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/vmware/govmomi/find"
 	"github.com/vmware/govmomi/object"
 	"github.com/vmware/govmomi/vim25/mo"
 	"github.com/vmware/govmomi/vim25/types"
@@ -218,11 +217,6 @@ func (c *Client) MappingStatus(ctx context.Context, uuid string) MappingStatus {
 		if strings.Contains(lower, "not found") || strings.Contains(lower, "outside govc_folder") {
 			out.Light = LightRed
 			out.Found = false
-		} else if isPermissionDenied(err) {
-			// Soft: mapping exists; inventory probe limited for this SA.
-			out.Light = LightYellow
-			out.Found = true
-			out.Error = "vSphere permission limited — power/name may be incomplete (VM still bound)"
 		} else {
 			out.Light = LightYellow
 			out.Found = false
@@ -230,25 +224,18 @@ func (c *Client) MappingStatus(ctx context.Context, uuid string) MappingStatus {
 		return out
 	}
 	out.Found = true
+	if pathName := vm.InventoryPath; pathName != "" {
+		out.Path = pathName
+	}
+
 	info, err := c.infoFromVM(ctx, vm)
 	if err != nil {
-		if isPermissionDenied(err) {
-			out.Light = LightYellow
-			out.Error = "vSphere permission limited — cannot read VM props (VM still bound)"
-			return out
-		}
 		out.Light = LightYellow
 		out.Error = err.Error()
 		return out
 	}
 	out.Name = info.Name
 	out.PowerState = info.PowerState
-	if pathName := vm.InventoryPath; pathName != "" {
-		out.Path = pathName
-	} else if p, err := find.InventoryPath(ctx, c.client.Client, vm.Reference()); err == nil {
-		out.Path = p
-	}
-	// Path/CDROM permission issues are warnings, not hard failures.
 	switch info.PowerState {
 	case "On":
 		out.Light = LightGreen
@@ -257,45 +244,85 @@ func (c *Client) MappingStatus(ctx context.Context, uuid string) MappingStatus {
 	default:
 		out.Light = LightYellow
 	}
-	if iso, err := c.cdromISOPath(ctx, vm); err == nil {
-		out.CDROMISO = iso
-	} else if err != nil && !strings.Contains(strings.ToLower(err.Error()), "no cdrom") {
-		if isPermissionDenied(err) {
-			if out.Error == "" {
-				out.Error = "cdrom: permission limited (ISO map may need VirtualMachine.Interact / Config.Read)"
-			}
-		} else if out.Error == "" {
+
+	iso, connected, err := c.cdromStatus(ctx, vm)
+	if err != nil {
+		if out.Error == "" {
 			out.Error = "cdrom: " + err.Error()
+		}
+	} else {
+		out.CDROMISO = iso
+		if iso == "" && !connected {
+			out.CDROMISO = ""
 		}
 	}
 	return out
 }
 
+// cdromStatus returns the ISO datastore path (if any) and whether media is connected.
+// Uses VirtualMachine.Device — same surface as `govc device.info -vm … cdrom-*`.
+func (c *Client) cdromStatus(ctx context.Context, vm *object.VirtualMachine) (isoPath string, connected bool, err error) {
+	devices, err := vm.Device(ctx)
+	if err != nil {
+		// Fallback to property collector (also used by govc vm.info -json).
+		return c.cdromISOPathProps(ctx, vm)
+	}
+	cdroms := devices.SelectByType((*types.VirtualCdrom)(nil))
+	if len(cdroms) == 0 {
+		return "", false, nil
+	}
+	cd := cdroms[0].(*types.VirtualCdrom)
+	if cd.Connectable != nil {
+		connected = cd.Connectable.Connected
+	}
+	switch b := cd.Backing.(type) {
+	case *types.VirtualCdromIsoBackingInfo:
+		return b.FileName, connected, nil
+	case *types.VirtualCdromRemotePassthroughBackingInfo,
+		*types.VirtualCdromRemoteAtapiBackingInfo,
+		*types.VirtualCdromAtapiBackingInfo:
+		return "", connected, nil
+	default:
+		return "", connected, nil
+	}
+}
+
 func (c *Client) cdromISOPath(ctx context.Context, vm *object.VirtualMachine) (string, error) {
-	var m mo.VirtualMachine
-	if err := vm.Properties(ctx, vm.Reference(), []string{"config.hardware.device"}, &m); err != nil {
+	iso, _, err := c.cdromStatus(ctx, vm)
+	if err != nil {
 		return "", err
 	}
-	if m.Config == nil {
+	if iso == "" {
 		return "", fmt.Errorf("no cdrom")
+	}
+	return iso, nil
+}
+
+func (c *Client) cdromISOPathProps(ctx context.Context, vm *object.VirtualMachine) (string, bool, error) {
+	var m mo.VirtualMachine
+	if err := vm.Properties(ctx, vm.Reference(), []string{"config.hardware.device"}, &m); err != nil {
+		return "", false, err
+	}
+	if m.Config == nil {
+		return "", false, nil
 	}
 	for _, d := range m.Config.Hardware.Device {
 		cd, ok := d.(*types.VirtualCdrom)
 		if !ok {
 			continue
 		}
+		connected := false
+		if cd.Connectable != nil {
+			connected = cd.Connectable.Connected
+		}
 		switch b := cd.Backing.(type) {
 		case *types.VirtualCdromIsoBackingInfo:
-			return b.FileName, nil
-		case *types.VirtualCdromRemotePassthroughBackingInfo:
-			return "", nil
-		case *types.VirtualCdromRemoteAtapiBackingInfo:
-			return "", nil
+			return b.FileName, connected, nil
 		default:
-			return "", nil
+			return "", connected, nil
 		}
 	}
-	return "", fmt.Errorf("no cdrom")
+	return "", false, nil
 }
 
 // CheckResult is one row in the Test connection checklist.

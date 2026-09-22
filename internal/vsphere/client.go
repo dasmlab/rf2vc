@@ -217,6 +217,39 @@ func (c *Client) findByUUID(ctx context.Context, uuid string) (*object.VirtualMa
 		return nil, err
 	}
 	uuid = strings.ToLower(strings.TrimSpace(uuid))
+
+	vm, err := c.findByUUIDSearchIndex(ctx, uuid)
+	if err == nil {
+		if err := c.checkFolder(ctx, vm); err != nil {
+			return nil, err
+		}
+		return vm, nil
+	}
+	firstErr := err
+
+	// SearchIndex.FindByUuid is often denied for least-priv SAs that can still
+	// list/operate VMs under GOVC_FOLDER (same as govc vm.info $GOVC_FOLDER/...).
+	if folder := strings.TrimSpace(c.ep.Folder); folder != "" {
+		if vm, ferr := c.findByUUIDInFolder(ctx, uuid, folder); ferr == nil {
+			activity.Run("vm-lookup", "resolved via folder walk (FindByUuid unavailable)", map[string]any{
+				"uuid":            uuid,
+				"path":            vm.InventoryPath,
+				"searchIndexErr":  firstErr.Error(),
+			})
+			return vm, nil
+		} else {
+			activity.RunWarn("vm-lookup", "folder walk missed uuid", map[string]any{
+				"uuid":   uuid,
+				"folder": folder,
+				"error":  ferr.Error(),
+				"first":  firstErr.Error(),
+			})
+		}
+	}
+	return nil, firstErr
+}
+
+func (c *Client) findByUUIDSearchIndex(ctx context.Context, uuid string) (*object.VirtualMachine, error) {
 	search := object.NewSearchIndex(c.client.Client)
 	instanceUUID := false
 	ref, err := search.FindByUuid(ctx, c.dc, uuid, true, &instanceUUID)
@@ -230,10 +263,35 @@ func (c *Client) findByUUID(ctx context.Context, uuid string) (*object.VirtualMa
 	if !ok {
 		return nil, fmt.Errorf("uuid %s is not a VirtualMachine", uuid)
 	}
-	if err := c.checkFolder(ctx, vm); err != nil {
+	return vm, nil
+}
+
+// findByUUIDInFolder walks GOVC_FOLDER (recursive) and matches BIOS UUID —
+// mirrors how govc resolves $GOVC_FOLDER/... when datacenter-wide FindByUuid is blocked.
+func (c *Client) findByUUIDInFolder(ctx context.Context, uuid, folder string) (*object.VirtualMachine, error) {
+	vms, err := c.findVMsUnderFolder(ctx, folder)
+	if err != nil {
 		return nil, err
 	}
-	return vm, nil
+	want := strings.ToLower(strings.TrimSpace(uuid))
+	for _, vm := range vms {
+		var m mo.VirtualMachine
+		if err := vm.Properties(ctx, vm.Reference(), []string{"config.uuid", "name"}, &m); err != nil {
+			continue
+		}
+		got := ""
+		if m.Config != nil {
+			got = strings.ToLower(strings.TrimSpace(m.Config.Uuid))
+		}
+		if got == "" || got != want {
+			continue
+		}
+		if !c.allow(m.Name) {
+			return nil, fmt.Errorf("system %s not allowed", uuid)
+		}
+		return vm, nil
+	}
+	return nil, fmt.Errorf("vm uuid %s not found under folder %q", uuid, folder)
 }
 
 // normalizeInventoryPath lowercases and trims for folder compares.
