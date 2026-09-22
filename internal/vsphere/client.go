@@ -46,7 +46,20 @@ type Client struct {
 
 	mu       sync.Mutex
 	mediaISO map[string]string
+
+	uuidMu           sync.Mutex
+	uuidCache        map[string]uuidCacheEntry
+	searchIndexDenied bool // FindByUuid permanently denied for this SA
 }
+
+type uuidCacheEntry struct {
+	ref  types.ManagedObjectReference
+	path string
+	at   time.Time
+}
+
+const uuidCacheTTL = 2 * time.Minute
+
 
 // NormalizeDatastore treats placeholders (NONE, notset, n/a, -) as unset.
 // Folder listing and UUID lookup work without a datastore; ISO staging does not.
@@ -218,20 +231,40 @@ func (c *Client) findByUUID(ctx context.Context, uuid string) (*object.VirtualMa
 	}
 	uuid = strings.ToLower(strings.TrimSpace(uuid))
 
-	vm, err := c.findByUUIDSearchIndex(ctx, uuid)
-	if err == nil {
-		if err := c.checkFolder(ctx, vm); err != nil {
-			return nil, err
-		}
+	if vm := c.cachedVM(uuid); vm != nil {
 		return vm, nil
 	}
-	firstErr := err
+
+	c.uuidMu.Lock()
+	skipSearch := c.searchIndexDenied
+	c.uuidMu.Unlock()
+
+	var firstErr error
+	if !skipSearch {
+		vm, err := c.findByUUIDSearchIndex(ctx, uuid)
+		if err == nil {
+			if err := c.checkFolder(ctx, vm); err != nil {
+				return nil, err
+			}
+			c.rememberUUID(uuid, vm)
+			return vm, nil
+		}
+		firstErr = err
+		if isPermissionDenied(err) {
+			c.uuidMu.Lock()
+			c.searchIndexDenied = true
+			c.uuidMu.Unlock()
+		}
+	} else {
+		firstErr = fmt.Errorf("SearchIndex.FindByUuid previously denied")
+	}
 
 	// SearchIndex.FindByUuid is often denied for least-priv SAs that can still
 	// list/operate VMs under GOVC_FOLDER (same as govc vm.info $GOVC_FOLDER/...).
 	if folder := strings.TrimSpace(c.ep.Folder); folder != "" {
 		vm, ferr := c.findByUUIDInFolder(ctx, uuid, folder)
 		if ferr == nil {
+			c.rememberUUID(uuid, vm)
 			activity.Run("vm-lookup", "resolved via folder walk (FindByUuid unavailable)", map[string]any{
 				"uuid":           uuid,
 				"path":           vm.InventoryPath,
@@ -249,6 +282,39 @@ func (c *Client) findByUUID(ctx context.Context, uuid string) (*object.VirtualMa
 		return nil, ferr
 	}
 	return nil, firstErr
+}
+
+func (c *Client) cachedVM(uuid string) *object.VirtualMachine {
+	c.uuidMu.Lock()
+	defer c.uuidMu.Unlock()
+	if c.client == nil || c.uuidCache == nil {
+		return nil
+	}
+	e, ok := c.uuidCache[uuid]
+	if !ok || time.Since(e.at) > uuidCacheTTL {
+		return nil
+	}
+	vm := object.NewVirtualMachine(c.client.Client, e.ref)
+	if e.path != "" {
+		vm.SetInventoryPath(e.path)
+	}
+	return vm
+}
+
+func (c *Client) rememberUUID(uuid string, vm *object.VirtualMachine) {
+	if vm == nil {
+		return
+	}
+	c.uuidMu.Lock()
+	defer c.uuidMu.Unlock()
+	if c.uuidCache == nil {
+		c.uuidCache = map[string]uuidCacheEntry{}
+	}
+	c.uuidCache[uuid] = uuidCacheEntry{
+		ref:  vm.Reference(),
+		path: vm.InventoryPath,
+		at:   time.Now(),
+	}
 }
 
 func (c *Client) findByUUIDSearchIndex(ctx context.Context, uuid string) (*object.VirtualMachine, error) {
