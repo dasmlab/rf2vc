@@ -55,6 +55,12 @@ func (c *Client) datastoreFileExists(ctx context.Context, dsPath string) (bool, 
 	info, err := c.ds.Stat(ctx, dsPath)
 	if err != nil {
 		if _, ok := err.(object.DatastoreNoSuchFileError); ok {
+			// Stat only matches files; directories often look "missing". Probe the folder itself.
+			if okDir, derr := c.datastoreDirExists(ctx, dsPath); derr != nil {
+				return false, 0, derr
+			} else if okDir {
+				return true, 0, nil
+			}
 			return false, 0, nil
 		}
 		if _, ok := err.(object.DatastoreNoSuchDirectoryError); ok {
@@ -62,12 +68,48 @@ func (c *Client) datastoreFileExists(ctx context.Context, dsPath string) (bool, 
 		}
 		msg := strings.ToLower(err.Error())
 		if strings.Contains(msg, "not found") || strings.Contains(msg, "no such") {
+			if okDir, derr := c.datastoreDirExists(ctx, dsPath); derr != nil {
+				return false, 0, derr
+			} else if okDir {
+				return true, 0, nil
+			}
 			return false, 0, nil
 		}
 		return false, 0, err
 	}
 	size := fileInfoSize(info)
 	return size > 0, size, nil
+}
+
+// datastoreDirExists is true when SearchDatastore on the path succeeds (even if empty).
+func (c *Client) datastoreDirExists(ctx context.Context, dsPath string) (bool, error) {
+	dsPath = strings.Trim(dsPath, "/")
+	if dsPath == "" {
+		return true, nil
+	}
+	browser, err := c.ds.Browser(ctx)
+	if err != nil {
+		return false, err
+	}
+	spec := types.HostDatastoreBrowserSearchSpec{
+		Details: &types.FileQueryFlags{FileType: true, FileSize: true},
+	}
+	task, err := browser.SearchDatastore(ctx, c.ds.Path(dsPath), &spec)
+	if err != nil {
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "not found") || strings.Contains(msg, "no such") {
+			return false, nil
+		}
+		return false, err
+	}
+	if _, err := task.WaitForResult(ctx, nil); err != nil {
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "not found") || strings.Contains(msg, "no such") {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 func fileInfoSize(info types.BaseFileInfo) int64 {
@@ -135,16 +177,12 @@ func (c *Client) ensureISOFolder(ctx context.Context) error {
 		}
 		return fmt.Errorf("mkdir %s: %w", dsPath, err)
 	}
-	// Confirm leaf folder is visible to the browser (catches dcPath / DS mismatches early).
-	if _, err := c.ds.Stat(ctx, folder); err != nil {
-		if _, ok := err.(object.DatastoreNoSuchDirectoryError); ok {
-			return fmt.Errorf("iso folder %s missing after mkdir: %w", c.ds.Path(folder), err)
-		}
-		msg := strings.ToLower(err.Error())
-		if strings.Contains(msg, "not found") || strings.Contains(msg, "no such") {
-			return fmt.Errorf("iso folder %s missing after mkdir: %w", c.ds.Path(folder), err)
-		}
-		// Stat of a directory sometimes returns FileInfo quirks — non-not-found is OK.
+	ok, err := c.datastoreDirExists(ctx, folder)
+	if err != nil {
+		return fmt.Errorf("verify iso folder %s: %w", c.ds.Path(folder), err)
+	}
+	if !ok {
+		return fmt.Errorf("iso folder %s missing after mkdir", c.ds.Path(folder))
 	}
 	return nil
 }
@@ -380,12 +418,57 @@ func (c *Client) uploadISOIfNeeded(ctx context.Context, localPath, dsPath string
 	return false, lastErr
 }
 
-// putISO PUTs a local file to the datastore via vCenter /folder/ with an
-// explicit vmware_cgi_ticket. Without the ticket, some vCenters answer 404 for
-// unauthenticated /folder/ PUTs even though SOAP session cookies work for /sdk.
+// putISO uploads via an ESXi host ticket first (reliable for NFS/Qumulo), then
+// falls back to a vCenter /folder/ PUT using the exact ticket URL.
 func (c *Client) putISO(ctx context.Context, localPath, dsPath string, size int64) error {
+	if strings.Contains(dsPath, "Provisionning") {
+		log.Printf("WARNING: ISO path contains typo Provisionning (double n): %s — UI folder is often OCP-Provisioning", dsPath)
+	}
+
+	if err := c.putISOViaHost(ctx, localPath, dsPath, size); err == nil {
+		return nil
+	} else {
+		log.Printf("host-ticket iso upload failed (%v); trying vCenter /folder/", err)
+	}
+	return c.putISOViaVC(ctx, localPath, dsPath, size)
+}
+
+func (c *Client) putISOViaHost(ctx context.Context, localPath, dsPath string, size int64) error {
+	hosts, err := c.ds.AttachedHosts(ctx)
+	if err != nil {
+		return err
+	}
+	if len(hosts) == 0 {
+		return fmt.Errorf("no attached hosts for datastore")
+	}
+	// Try a few hosts — management IPs may be unreachable from the pod network.
+	var last error
+	limit := 3
+	if len(hosts) < limit {
+		limit = len(hosts)
+	}
+	for i := 0; i < limit; i++ {
+		h := hosts[i]
+		name, _ := h.ObjectName(ctx)
+		log.Printf("uploading iso via host %s → %s (%d bytes)", name, c.ds.Path(dsPath), size)
+		hctx := c.ds.HostContext(ctx, h)
+		p := soap.DefaultUpload
+		if err := c.ds.UploadFile(hctx, localPath, dsPath, &p); err != nil {
+			last = err
+			log.Printf("host %s upload: %v", name, err)
+			continue
+		}
+		return nil
+	}
+	return last
+}
+
+func (c *Client) putISOViaVC(ctx context.Context, localPath, dsPath string, size int64) error {
 	u := c.ds.NewURL(dsPath)
-	log.Printf("uploading iso to datastore %s (%d bytes) dcPath=%q dsName=%q url=%s",
+	// Strip userinfo — tickets/cookies auth the transfer; userinfo breaks some VC proxies.
+	u.User = nil
+
+	log.Printf("uploading iso via vCenter %s (%d bytes) dcPath=%q dsName=%q url=%s",
 		c.ds.Path(dsPath), size, c.ds.DatacenterPath, c.ds.Name(), u.Redacted())
 
 	sm := session.NewManager(c.client.Client)
@@ -397,14 +480,18 @@ func (c *Client) putISO(ctx context.Context, localPath, dsPath string, size int6
 		return fmt.Errorf("acquire upload ticket: %w", err)
 	}
 
-	p := soap.DefaultUpload
-	p.Ticket = &http.Cookie{
-		Name:  "vmware_cgi_ticket",
-		Value: ticket.Id,
+	f, err := os.Open(localPath)
+	if err != nil {
+		return err
 	}
-	p.Close = true
+	defer f.Close()
 
-	if err := c.ds.UploadFile(ctx, localPath, dsPath, &p); err != nil {
+	p := soap.DefaultUpload
+	p.Ticket = &http.Cookie{Name: "vmware_cgi_ticket", Value: ticket.Id}
+	p.Close = true
+	p.ContentLength = size
+	// Upload to the exact URL we ticketed (do not re-derive via Datastore.UploadFile).
+	if err := c.client.Client.Upload(ctx, f, u, &p); err != nil {
 		return err
 	}
 	return nil

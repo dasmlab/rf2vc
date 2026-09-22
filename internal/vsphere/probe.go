@@ -186,11 +186,14 @@ func (c *Client) probeISOFolder(ctx context.Context) error {
 	if folder == "" {
 		return nil
 	}
-	exists, _, err := c.datastoreFileExists(ctx, folder)
+	if strings.Contains(folder, "Provisionning") {
+		return fmt.Errorf("ISO folder %q has typo Provisionning (double n) — set to OCP-Provisioning/rf2vc/isos and Save", folder)
+	}
+	ok, err := c.datastoreDirExists(ctx, folder)
 	if err != nil {
 		return err
 	}
-	if !exists {
+	if !ok {
 		return fmt.Errorf("ISO folder %q not found on datastore (created on first upload)", folder)
 	}
 	return nil
