@@ -513,10 +513,14 @@ func (c *Client) softPowerOff(ctx context.Context, vm *object.VirtualMachine, ti
 
 // ensureMsgAutoAnswer makes vCenter auto-accept CD-ROM lock / similar prompts
 // so BMH teardown (eject + power off) does not hang on "Answer Question".
+// cdrom.showIsoLockWarning=FALSE is the VMware-documented force path for
+// "Disconnect anyway and override the lock" without an interactive prompt
+// (KB 313891) — msg.autoAnswer alone often still yields Connection control failed.
 func (c *Client) ensureMsgAutoAnswer(ctx context.Context, vm *object.VirtualMachine) error {
 	spec := types.VirtualMachineConfigSpec{
 		ExtraConfig: []types.BaseOptionValue{
 			&types.OptionValue{Key: "msg.autoAnswer", Value: "TRUE"},
+			&types.OptionValue{Key: "cdrom.showIsoLockWarning", Value: "FALSE"},
 		},
 	}
 	task, err := vm.Reconfigure(ctx, spec)
@@ -701,22 +705,29 @@ func (c *Client) EjectMedia(ctx context.Context, uuid string) error {
 	}
 	if err := c.detachCDROM(ctx, vm); err != nil {
 		// Guest often locks the CD while powered on ("Connection control operation
-		// failed for disk 'sata0:0'"). Prefer a clean guest shutdown so the
-		// rootfs is not yanked under write; hard PowerOff only as fallback.
-		// Always restore prior power state afterward — Ironic may assume the
-		// node stays up / will reboot itself after eject.
+		// failed for disk 'sata0:0'"). Prefer force-unlock ExtraConfig + retry;
+		// only then soft/hard power cycle. Always restore prior power — Ironic
+		// ejects then issues its own reboot ("Ironic will reboot the node shortly").
 		if !isCDROMConnectionLocked(err) {
 			return err
 		}
-		log.Printf("EjectMedia: CD locked while powered on; soft-off then eject uuid=%s err=%v", uuid, err)
-		if softErr := c.softPowerOff(ctx, vm, 90*time.Second); softErr != nil {
-			log.Printf("EjectMedia: soft-off failed uuid=%s (%v); hard PowerOff", uuid, softErr)
-			if offErr := c.powerOff(ctx, vm); offErr != nil {
-				return fmt.Errorf("eject (power-off for CD unlock): %w (detach: %v; soft: %v)", offErr, err, softErr)
+		log.Printf("EjectMedia: CD locked; force-unlock ExtraConfig + retry uuid=%s err=%v", uuid, err)
+		_ = c.ensureMsgAutoAnswer(ctx, vm)
+		_ = c.answerPendingQuestions(ctx, vm)
+		if retryErr := c.detachCDROM(ctx, vm); retryErr != nil {
+			if !isCDROMConnectionLocked(retryErr) {
+				return retryErr
 			}
-		}
-		if err := c.detachCDROM(ctx, vm); err != nil {
-			return fmt.Errorf("eject after power-off: %w", err)
+			log.Printf("EjectMedia: still locked after force-unlock; soft-off then eject uuid=%s err=%v", uuid, retryErr)
+			if softErr := c.softPowerOff(ctx, vm, 45*time.Second); softErr != nil {
+				log.Printf("EjectMedia: soft-off failed uuid=%s (%v); hard PowerOff", uuid, softErr)
+				if offErr := c.powerOff(ctx, vm); offErr != nil {
+					return fmt.Errorf("eject (power-off for CD unlock): %w (detach: %v; soft: %v)", offErr, retryErr, softErr)
+				}
+			}
+			if err := c.detachCDROM(ctx, vm); err != nil {
+				return fmt.Errorf("eject after power-off: %w", err)
+			}
 		}
 	}
 	// Always undo SetBootCDOnce — otherwise next power-on still prefers CDROM.
