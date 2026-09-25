@@ -477,6 +477,40 @@ func (c *Client) powerOff(ctx context.Context, vm *object.VirtualMachine) error 
 	return c.waitTask(ctx, vm, task)
 }
 
+// softPowerOff asks VMware Tools for a clean guest shutdown, then waits until
+// powered off. Used before CD eject so we do not yank power under a live
+// rootfs (hard PowerOff → "Structure needs cleaning" on next boot).
+func (c *Client) softPowerOff(ctx context.Context, vm *object.VirtualMachine, timeout time.Duration) error {
+	state, err := vm.PowerState(ctx)
+	if err != nil {
+		return err
+	}
+	if state == types.VirtualMachinePowerStatePoweredOff {
+		return nil
+	}
+	if err := vm.ShutdownGuest(ctx); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		state, err := vm.PowerState(ctx)
+		if err != nil {
+			return err
+		}
+		if state == types.VirtualMachinePowerStatePoweredOff {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("guest shutdown timed out after %s", timeout)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
 // ensureMsgAutoAnswer makes vCenter auto-accept CD-ROM lock / similar prompts
 // so BMH teardown (eject + power off) does not hang on "Answer Question".
 func (c *Client) ensureMsgAutoAnswer(ctx context.Context, vm *object.VirtualMachine) error {
@@ -661,16 +695,25 @@ func (c *Client) EjectMedia(ctx context.Context, uuid string) error {
 	if err != nil {
 		return err
 	}
+	wasOn := false
+	if st, stErr := vm.PowerState(ctx); stErr == nil {
+		wasOn = st == types.VirtualMachinePowerStatePoweredOn
+	}
 	if err := c.detachCDROM(ctx, vm); err != nil {
 		// Guest often locks the CD while powered on ("Connection control operation
-		// failed for disk 'sata0:0'"). Ironic still reboots → boots ISO again.
-		// Power off, detach, leave off; ironic's next Reset=On powers back up.
+		// failed for disk 'sata0:0'"). Prefer a clean guest shutdown so the
+		// rootfs is not yanked under write; hard PowerOff only as fallback.
+		// Always restore prior power state afterward — Ironic may assume the
+		// node stays up / will reboot itself after eject.
 		if !isCDROMConnectionLocked(err) {
 			return err
 		}
-		log.Printf("EjectMedia: CD locked while powered on; powering off then eject uuid=%s err=%v", uuid, err)
-		if offErr := c.powerOff(ctx, vm); offErr != nil {
-			return fmt.Errorf("eject (power-off for CD unlock): %w (detach: %v)", offErr, err)
+		log.Printf("EjectMedia: CD locked while powered on; soft-off then eject uuid=%s err=%v", uuid, err)
+		if softErr := c.softPowerOff(ctx, vm, 90*time.Second); softErr != nil {
+			log.Printf("EjectMedia: soft-off failed uuid=%s (%v); hard PowerOff", uuid, softErr)
+			if offErr := c.powerOff(ctx, vm); offErr != nil {
+				return fmt.Errorf("eject (power-off for CD unlock): %w (detach: %v; soft: %v)", offErr, err, softErr)
+			}
 		}
 		if err := c.detachCDROM(ctx, vm); err != nil {
 			return fmt.Errorf("eject after power-off: %w", err)
@@ -683,6 +726,11 @@ func (c *Client) EjectMedia(ctx context.Context, uuid string) error {
 	c.mu.Lock()
 	delete(c.mediaISO, strings.ToLower(uuid))
 	c.mu.Unlock()
+	if wasOn {
+		if onErr := c.powerOn(ctx, vm); onErr != nil {
+			return fmt.Errorf("restore power after eject: %w", onErr)
+		}
+	}
 	return nil
 }
 

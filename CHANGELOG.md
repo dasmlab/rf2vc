@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.0.33] — 2026-09-25
+
+- **EjectMedia**: on CD lock, prefer guest soft-shutdown (then hard PowerOff only if needed), detach + disk-first boot, then **restore prior power** (no longer leave the VM off). Avoids yanking power under a live rootfs ("Structure needs cleaning") and the stuck-off after eject.
+
 ## [1.0.32] — 2026-09-25
 
 - **EjectMedia**: if CD disconnect fails while the guest is up (`Connection control operation failed for disk 'sata0:0'`), power off, detach, leave powered off (Ironic powers back on). Always restore **disk-first** boot order after eject.
