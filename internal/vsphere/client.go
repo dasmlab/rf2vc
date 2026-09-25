@@ -559,6 +559,7 @@ func (c *Client) waitTask(ctx context.Context, vm *object.VirtualMachine, task *
 }
 
 // SetBootCDOnce puts CDROM first in the VM boot order (then disks with DeviceKey).
+// vSphere has no true Redfish "Once" — this sticks until SetBootDiskFirst / EjectMedia.
 // Bare BootableDiskDevice{} without DeviceKey is rejected by vCenter as
 // configSpec.bootOptions.bootOrder — use devices.BootOrder like govc device.boot.
 func (c *Client) SetBootCDOnce(ctx context.Context, uuid string) error {
@@ -566,12 +567,30 @@ func (c *Client) SetBootCDOnce(ctx context.Context, uuid string) error {
 	if err != nil {
 		return err
 	}
+	return c.setBootOrderVM(ctx, vm, []string{"cdrom", "disk"})
+}
+
+// SetBootDiskFirst clears CD-first boot so the next power-on boots the installed disk.
+// Call on EjectMedia and when Ironic PATCHes BootSourceOverride Enabled=Disabled / Target=Hdd.
+func (c *Client) SetBootDiskFirst(ctx context.Context, uuid string) error {
+	vm, err := c.findByUUID(ctx, uuid)
+	if err != nil {
+		return err
+	}
+	return c.setBootDiskFirstVM(ctx, vm)
+}
+
+func (c *Client) setBootDiskFirstVM(ctx context.Context, vm *object.VirtualMachine) error {
+	return c.setBootOrderVM(ctx, vm, []string{"disk"})
+}
+
+func (c *Client) setBootOrderVM(ctx context.Context, vm *object.VirtualMachine, prefer []string) error {
 	devices, err := vm.Device(ctx)
 	if err != nil {
 		return err
 	}
-	order := devices.BootOrder([]string{"cdrom", "disk"})
-	if len(order) == 0 {
+	order := devices.BootOrder(prefer)
+	if len(order) == 0 && len(prefer) > 0 && prefer[0] == "cdrom" {
 		// No CDROM device yet — still request CD so a later attach can boot.
 		order = []types.BaseVirtualMachineBootOptionsBootableDevice{
 			&types.VirtualMachineBootOptionsBootableCdromDevice{},
@@ -643,12 +662,38 @@ func (c *Client) EjectMedia(ctx context.Context, uuid string) error {
 		return err
 	}
 	if err := c.detachCDROM(ctx, vm); err != nil {
-		return err
+		// Guest often locks the CD while powered on ("Connection control operation
+		// failed for disk 'sata0:0'"). Ironic still reboots → boots ISO again.
+		// Power off, detach, leave off; ironic's next Reset=On powers back up.
+		if !isCDROMConnectionLocked(err) {
+			return err
+		}
+		log.Printf("EjectMedia: CD locked while powered on; powering off then eject uuid=%s err=%v", uuid, err)
+		if offErr := c.powerOff(ctx, vm); offErr != nil {
+			return fmt.Errorf("eject (power-off for CD unlock): %w (detach: %v)", offErr, err)
+		}
+		if err := c.detachCDROM(ctx, vm); err != nil {
+			return fmt.Errorf("eject after power-off: %w", err)
+		}
+	}
+	// Always undo SetBootCDOnce — otherwise next power-on still prefers CDROM.
+	if err := c.setBootDiskFirstVM(ctx, vm); err != nil {
+		return fmt.Errorf("restore disk boot after eject: %w", err)
 	}
 	c.mu.Lock()
 	delete(c.mediaISO, strings.ToLower(uuid))
 	c.mu.Unlock()
 	return nil
+}
+
+func isCDROMConnectionLocked(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "Connection control operation failed") ||
+		strings.Contains(s, "device is locked") ||
+		strings.Contains(s, "being used by the guest")
 }
 
 func (c *Client) downloadISO(ctx context.Context, imageURL string) (string, error) {

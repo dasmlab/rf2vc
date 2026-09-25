@@ -337,8 +337,10 @@ func (s *Server) systemPatch(w http.ResponseWriter, r *http.Request, id string) 
 	}
 	if body.Boot != nil {
 		target := strings.ToLower(body.Boot.BootSourceOverrideTarget)
-		if target == "cd" || target == "cdrom" || target == "usb" || target == "usbcd" {
-			detail := map[string]any{"uuid": id, "bootTarget": target}
+		enabled := strings.ToLower(body.Boot.BootSourceOverrideEnabled)
+		detail := map[string]any{"uuid": id, "bootTarget": target, "bootEnabled": enabled}
+		switch {
+		case target == "cd" || target == "cdrom" || target == "usb" || target == "usbcd":
 			if s.st.DryRunForUUID(id) {
 				activity.OutDry("BootOverride", "would set boot CD once (dry-run)", detail)
 				w.WriteHeader(http.StatusNoContent)
@@ -350,6 +352,24 @@ func (s *Server) systemPatch(w http.ResponseWriter, r *http.Request, id string) 
 			}
 			activity.Out("BootOverride", "set boot CD once", detail)
 			if err := c.SetBootCDOnce(r.Context(), id); err != nil {
+				activity.OutErr("BootOverride", err.Error(), detail)
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		case enabled == "disabled" || target == "" || target == "none" ||
+			target == "hdd" || target == "disk" || target == "pxe" || target == "diags":
+			// Ironic clears CD override before/after eject so the install reboot hits disk.
+			if s.st.DryRunForUUID(id) {
+				activity.OutDry("BootOverride", "would set boot disk first (dry-run)", detail)
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			c, ok := s.clientFor(w, id)
+			if !ok {
+				return
+			}
+			activity.Out("BootOverride", "set boot disk first", detail)
+			if err := c.SetBootDiskFirst(r.Context(), id); err != nil {
 				activity.OutErr("BootOverride", err.Error(), detail)
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
