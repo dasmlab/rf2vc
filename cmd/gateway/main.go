@@ -15,6 +15,7 @@ import (
 	"github.com/dasmlab/rf2vc/internal/activity"
 	"github.com/dasmlab/rf2vc/internal/api"
 	"github.com/dasmlab/rf2vc/internal/config"
+	"github.com/dasmlab/rf2vc/internal/kubeauth"
 	"github.com/dasmlab/rf2vc/internal/redfish"
 	"github.com/dasmlab/rf2vc/internal/store"
 	"github.com/dasmlab/rf2vc/internal/vsphere"
@@ -62,12 +63,13 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	}
-	mountRedfish := func(mux *http.ServeMux) {
-		redfish.NewServer(cfg, st, pool).Mount(mux)
+	apiSrv := api.New(st, pool, buildVersion)
+	mountAPI := func(mux *http.ServeMux, mode string) {
+		apiSrv.Mount(mux)
+		mux.HandleFunc("/api/v1/whoami", whoami(mode))
 	}
 	mountUI := func(mux *http.ServeMux, mode string) {
-		api.New(st, pool, buildVersion).Mount(mux)
-		mux.HandleFunc("/api/v1/whoami", whoami(mode))
+		mountAPI(mux, mode)
 		staticFS, err := fs.Sub(web.Assets, "static")
 		if err != nil {
 			log.Fatalf("web static: %v", err)
@@ -88,9 +90,48 @@ func main() {
 		})
 	}
 
+	creds := newCredentials(cfg.Auth.Username, cfg.Auth.Password, cfg.Auth.RedfishClientsDir, !cfg.Auth.DisableSharedRedfish)
+	if cfg.Auth.RedfishClientsDir != "" {
+		creds.clientsNow()
+		log.Printf("redfish clients from %s (shared account on /redfish: %v)",
+			cfg.Auth.RedfishClientsDir, !cfg.Auth.DisableSharedRedfish)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", healthz)
-	mountRedfish(mux)
+	redfish.NewServer(cfg, st, pool).Mount(mux)
+	if cfg.APIListen != "" {
+		rev, err := kubeauth.InCluster(kubeauth.ResourceAttributes{
+			Verb: "get", Resource: "services", Name: cfg.Auth.APIService,
+		})
+		if err != nil {
+			log.Fatalf("apiListen: %v", err)
+		}
+		apiMux := http.NewServeMux()
+		apiMux.HandleFunc("/healthz", healthz)
+		mountAPI(apiMux, "token")
+		apiListener := &http.Server{
+			Addr:              cfg.APIListen,
+			Handler:           tokenAuth(rev, apiMux),
+			ReadHeaderTimeout: 15 * time.Second,
+		}
+		go func() {
+			var err error
+			if cfg.APITLSCertFile != "" && cfg.APITLSKeyFile != "" {
+				log.Printf("/api on %s (TLS): Kubernetes bearer tokens that may %s", cfg.APIListen, rev.Attributes())
+				err = apiListener.ListenAndServeTLS(cfg.APITLSCertFile, cfg.APITLSKeyFile)
+			} else {
+				log.Printf("WARNING: /api on %s is plain HTTP; bearer tokens travel unencrypted", cfg.APIListen)
+				err = apiListener.ListenAndServe()
+			}
+			if err != nil && err != http.ErrServerClosed {
+				log.Fatalf("api listen: %v", err)
+			}
+		}()
+		defer func() { _ = apiListener.Close() }()
+	}
+
+	handler := basicAuth(creds, mux)
 	if cfg.UIListen == "" {
 		mountUI(mux, "basic")
 	} else {
@@ -111,8 +152,6 @@ func main() {
 		}()
 		defer func() { _ = uiSrv.Close() }()
 	}
-
-	handler := basicAuth(cfg.Auth.Username, cfg.Auth.Password, mux)
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,

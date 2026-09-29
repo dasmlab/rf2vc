@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.2.0] — 2026-09-29
+
+- **System callers on `/api` use ServiceAccount tokens**: new TLS listener `:8444` (`apiListen` / `RF2VC_API_LISTEN`, service-ca cert, Service port `api`). Tokens are checked with SelfSubjectReview + SelfSubjectAccessReview using the caller's own token against Role `rf2vc-ui-access` (no `system:auth-delegator` needed). ServiceAccount `rf2vc-api-client` + RoleBinding `rf2vc-api-clients` added.
+- **Per-BMH Redfish credentials**: optional Secret `rf2vc-redfish-clients` (key = username, value = password), mounted at `RF2VC_REDFISH_CLIENTS_DIR` and re-read for rotation without restart. The shared account still works on `/redfish` (with a warning in Activity) until `RF2VC_REDFISH_DISABLE_SHARED=true`.
+- Redfish inbound activity records the `client`; token API changes are logged as `api <METHOD> <path>` with the ServiceAccount.
+
 ## [1.1.0] — 2026-09-29
 
 - **Dashboard login via the cluster IdP**: OpenShift oauth-proxy sidecar in front of the dashboard + `/api`, gated by RBAC (`rf2vc-ui-access` → Group `tdm-chips-admin`). The `rf2vc-gateway` Secret account stays as break-glass on the proxy sign-in page.

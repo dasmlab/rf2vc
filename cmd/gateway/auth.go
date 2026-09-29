@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -12,6 +14,8 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/dasmlab/rf2vc/internal/activity"
+	"github.com/dasmlab/rf2vc/internal/kubeauth"
+	"github.com/dasmlab/rf2vc/internal/redfish"
 )
 
 const (
@@ -23,7 +27,11 @@ func isHealthz(path string) bool {
 	return path == "/healthz"
 }
 
-func basicAuth(user, pass string, next http.Handler) http.Handler {
+func isRedfishPath(path string) bool {
+	return path == "/redfish" || strings.HasPrefix(path, "/redfish/")
+}
+
+func basicAuth(creds *credentials, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isHealthz(r.URL.Path) {
 			next.ServeHTTP(w, r)
@@ -36,15 +44,11 @@ func basicAuth(user, pass string, next http.Handler) http.Handler {
 			return
 		}
 		u, p, ok := r.BasicAuth()
-		if !ok || u != user || p != pass {
-			reason := "missing"
-			if ok {
-				if u != user {
-					reason = "bad-user"
-				} else {
-					reason = "bad-password"
-				}
-			}
+		reason := "missing"
+		if ok {
+			ok, reason = creds.check(u, p, isRedfishPath(r.URL.Path))
+		}
+		if !ok {
 			// Log before rejecting — BMH 401s previously looked like "no traffic"
 			// because inbound activity only ran after auth succeeded.
 			activity.InErr("auth", "401 Unauthorized", map[string]any{
@@ -58,6 +62,58 @@ func basicAuth(user, pass string, next http.Handler) http.Handler {
 			w.Header().Set("WWW-Authenticate", `Basic realm="rf2vc"`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
+		}
+		next.ServeHTTP(w, r.WithContext(redfish.WithClient(r.Context(), u)))
+	})
+}
+
+type tokenReviewer interface {
+	Review(ctx context.Context, token string) (string, error)
+}
+
+// tokenAuth guards the system-caller API listener: a Kubernetes bearer token
+// (ServiceAccount) that may "get" the rf2vc Service.
+func tokenAuth(rev tokenReviewer, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isHealthz(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		fail := func(code int, reason, user string) {
+			activity.InErr("auth", fmt.Sprintf("%d %s", code, http.StatusText(code)), map[string]any{
+				"method": r.Method,
+				"path":   r.URL.Path,
+				"remote": r.RemoteAddr,
+				"reason": reason,
+				"user":   user,
+			})
+			if code == http.StatusUnauthorized {
+				w.Header().Set("WWW-Authenticate", `Bearer realm="rf2vc"`)
+			}
+			http.Error(w, http.StatusText(code), code)
+		}
+		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if !ok || strings.TrimSpace(token) == "" {
+			fail(http.StatusUnauthorized, "missing-bearer", "")
+			return
+		}
+		user, err := rev.Review(r.Context(), strings.TrimSpace(token))
+		switch {
+		case errors.Is(err, kubeauth.ErrUnauthenticated):
+			fail(http.StatusUnauthorized, "invalid-token", "")
+			return
+		case errors.Is(err, kubeauth.ErrForbidden):
+			fail(http.StatusForbidden, "forbidden", user)
+			return
+		case err != nil:
+			log.Printf("token review: %v", err)
+			fail(http.StatusServiceUnavailable, "review-failed", user)
+			return
+		}
+		r.Header.Del(headerForwardedEmail)
+		r.Header.Set(headerForwardedUser, user)
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			activity.Run("api", r.Method+" "+r.URL.Path, map[string]any{"user": user})
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -91,12 +147,13 @@ func forwardedUser(r *http.Request) string {
 	return strings.TrimSpace(r.Header.Get(headerForwardedEmail))
 }
 
-// whoami reports the signed-in dashboard user. mode is "oauth" behind the
-// proxy (sign-out at /oauth/sign_out) and "basic" on the single-listener setup.
+// whoami reports the caller. mode is "oauth" behind the proxy (sign-out at
+// /oauth/sign_out), "token" for bearer callers and "basic" on the
+// single-listener setup.
 func whoami(mode string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		out := map[string]string{"mode": mode}
-		if mode == "oauth" {
+		if mode != "basic" {
 			out["user"] = forwardedUser(r)
 			out["email"] = strings.TrimSpace(r.Header.Get(headerForwardedEmail))
 		} else if u, _, ok := r.BasicAuth(); ok {

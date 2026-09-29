@@ -45,22 +45,47 @@ oc apply -k deploy/openshift/
 oc -n rf2vc-system get pods,route
 ```
 
-### Dashboard login (OpenShift IdP)
+### Access: people, systems, BMHs
 
-The dashboard and `/api` sit behind the OpenShift **oauth-proxy** sidecar; `/redfish` does not.
+People sign in with the cluster IdP; systems use ServiceAccount tokens; BMHs keep Redfish Basic Auth.
 
-| Path | Route | Auth |
+| Caller | Endpoint | Auth |
 |---|---|---|
-| `/`, `/static`, `/api/v1/*` | `rf2vc` (reencrypt → oauth-proxy :8443 → gateway `127.0.0.1:8081`) | OpenShift login, members of `tdm-chips-admin` |
-| `/redfish/*` | `rf2vc-redfish` (same host, `path: /redfish`, edge → gateway :8080) | Basic Auth (BMH credentials, unchanged) |
+| People (browser) | Route `rf2vc`: `/`, `/static`, `/api/v1/*` (reencrypt → oauth-proxy :8443 → gateway `127.0.0.1:8081`) | OpenShift login, members of `tdm-chips-admin`; break-glass form |
+| Systems (in-cluster) | `https://rf2vc.<ns>.svc:8444/api/v1/*` (Service port `api`, service-ca TLS) | `Authorization: Bearer <ServiceAccount token>` |
+| BMH / Ironic | Route `rf2vc-redfish`: `/redfish/*` (same host, `path: /redfish`, edge → gateway :8080) | Redfish Basic Auth, one credential per BMH |
 
-- **Who gets in:** RBAC. The proxy runs `--openshift-sar` for `get services/rf2vc` in the namespace, and
-  Role/RoleBinding `rf2vc-ui-access` grants that to Group `tdm-chips-admin`. Add groups there.
-  Check the group exists: `oc get group tdm-chips-admin`.
+- **Who gets in:** RBAC, one Role `rf2vc-ui-access` (`get services/rf2vc`). The proxy checks it for
+  people (`--openshift-sar`); the gateway checks it for tokens (SelfSubjectReview +
+  SelfSubjectAccessReview made *with the caller's token*, so no `system:auth-delegator` binding).
+  People: Group `tdm-chips-admin` in RoleBinding `rf2vc-ui-access` (`oc get group tdm-chips-admin`).
+  Systems: ServiceAccount `rf2vc-api-client` in RoleBinding `rf2vc-api-clients`; add more there.
+- **System caller example** (pod running as `rf2vc-api-client`, or any SA added to the RoleBinding):
+
+  ```bash
+  curl --cacert /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt \
+    -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" \
+    https://rf2vc.rf2vc-system.svc:8444/api/v1/mappings
+  # outside a pod: TOKEN=$(oc -n rf2vc-system create token rf2vc-api-client)
+  ```
+
+- **BMH credentials:** Secret `rf2vc-redfish-clients` (optional), one key per BMH (or per cluster):
+  key = Redfish username, value = password. Put the same pair in that BMH's `credentialsName` Secret.
+  The gateway re-reads it (kubelet sync, ~1 min) — add, rotate or remove a key without a restart.
+
+  ```bash
+  oc -n rf2vc-system create secret generic rf2vc-redfish-clients \
+    --from-literal=bmh-mo-lab="$(openssl rand -base64 24)"
+  ```
+
+  While BMHs still use the shared `rf2vc-gateway` account, Activity → Runtime warns
+  "Redfish call used the shared account". Once none do, set `RF2VC_REDFISH_DISABLE_SHARED=true`:
+  the shared account then stops working on `/redfish` (it remains break-glass for the dashboard).
 - **Break-glass:** the `rf2vc-gateway` Secret account also works on the proxy's sign-in page
   (username/password form). An init container writes its bcrypt htpasswd (`rf2vc -write-htpasswd`).
-- **Audit:** the signed-in user is shown in the header, and UI changes are logged in Activity → Runtime
-  as `ui <METHOD> <path>` with the user.
+- **Audit:** the signed-in user is shown in the header. Changes are logged in Activity → Runtime as
+  `ui <METHOD> <path>` (people) or `api <METHOD> <path>` (tokens) with the user; Redfish inbound
+  entries carry `client` (the BMH credential).
 - Both Routes must use the same explicit `host` (set it in `deploy/openshift/route.yaml`).
 - Without `RF2VC_UI_LISTEN` / `uiListen` the gateway keeps the old single listener with Basic Auth
   everywhere (local runs).
@@ -70,7 +95,7 @@ BMH example (replace host + secret):
 ```yaml
 bmc:
   address: "redfish-virtualmedia://rf2vc.apps.<cluster>/redfish/v1/Systems/<BIOS-UUID>"
-  credentialsName: <secret matching rf2vc auth>
+  credentialsName: <secret with a username/password from rf2vc-redfish-clients>
   disableCertificateVerification: true
 ```
 
@@ -83,10 +108,10 @@ make build && make run
 # UI: http://127.0.0.1:8080/  (basic auth)
 ```
 
-## API (OpenShift login via oauth-proxy; Basic Auth when running without it)
+## API (people via oauth-proxy, systems via bearer token on :8444; Basic Auth when running without either)
 
 - `GET /api/v1/status`
-- `GET /api/v1/whoami` — signed-in user (`mode`: `oauth` | `basic`)
+- `GET /api/v1/whoami` — caller (`mode`: `oauth` | `token` | `basic`)
 - `GET|POST /api/v1/vcenters`
 - `GET|PUT|DELETE /api/v1/vcenters/{id}`
 - `POST /api/v1/vcenters/{id}/test`

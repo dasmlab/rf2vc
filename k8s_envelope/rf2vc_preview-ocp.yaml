@@ -19,8 +19,9 @@ metadata:
     serviceaccounts.openshift.io/oauth-redirectreference.primary: '{"kind":"OAuthRedirectReference","apiVersion":"v1","reference":{"kind":"Route","name":"rf2vc"}}'
 
 ---
-# Dashboard access = this Role. oauth-proxy checks it with --openshift-sar;
-# add or remove IdP groups in the RoleBinding below.
+# Access = this Role. oauth-proxy checks it for dashboard users (--openshift-sar)
+# and the gateway checks it for /api bearer tokens (:8444). Grant people via
+# IdP groups in rf2vc-ui-access, systems via ServiceAccounts in rf2vc-api-clients.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -46,6 +47,29 @@ subjects:
   - apiGroup: rbac.authorization.k8s.io
     kind: Group
     name: tdm-chips-admin
+
+---
+# System caller for /api: https://rf2vc.__PREVIEW_NS__.svc:8444 with this SA's token.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rf2vc-api-client
+  namespace: __PREVIEW_NS__
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rf2vc-api-clients
+  namespace: __PREVIEW_NS__
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: rf2vc-ui-access
+subjects:
+  - kind: ServiceAccount
+    name: rf2vc-api-client
+    namespace: __PREVIEW_NS__
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -175,6 +199,19 @@ spec:
             # dashboard + /api only on loopback, reachable through oauth-proxy
             - name: RF2VC_UI_LISTEN
               value: "127.0.0.1:8081"
+            # /api for systems: Kubernetes bearer tokens, TLS via service-ca
+            - name: RF2VC_API_LISTEN
+              value: ":8444"
+            - name: RF2VC_API_TLS_CERT
+              value: /etc/tls/private/tls.crt
+            - name: RF2VC_API_TLS_KEY
+              value: /etc/tls/private/tls.key
+            # per-BMH Redfish credentials (optional Secret rf2vc-redfish-clients)
+            - name: RF2VC_REDFISH_CLIENTS_DIR
+              value: /etc/rf2vc-redfish-clients
+            # "true" once every BMH uses its own credential
+            - name: RF2VC_REDFISH_DISABLE_SHARED
+              value: "false"
             - name: RF2VC_DATA_DIR
               value: "/data"
             - name: BUILD_VERSION
@@ -195,9 +232,17 @@ spec:
               readOnly: true
             - name: data
               mountPath: /data
+            - name: proxy-tls
+              mountPath: /etc/tls/private
+              readOnly: true
+            - name: redfish-clients
+              mountPath: /etc/rf2vc-redfish-clients
+              readOnly: true
           ports:
             - name: http
               containerPort: 8080
+            - name: api
+              containerPort: 8444
           readinessProbe:
             httpGet:
               path: /healthz
@@ -282,6 +327,11 @@ spec:
         - name: htpasswd
           emptyDir:
             medium: Memory
+        # one key per BMH: key = Redfish username, value = password
+        - name: redfish-clients
+          secret:
+            secretName: rf2vc-redfish-clients
+            optional: true
 
 ---
 apiVersion: v1
@@ -302,6 +352,10 @@ spec:
     - name: https
       port: 8443
       targetPort: https
+      protocol: TCP
+    - name: api
+      port: 8444
+      targetPort: api
       protocol: TCP
 
 ---

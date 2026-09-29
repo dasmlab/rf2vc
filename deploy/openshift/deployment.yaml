@@ -62,6 +62,19 @@ spec:
             # dashboard + /api only on loopback, reachable through oauth-proxy
             - name: RF2VC_UI_LISTEN
               value: "127.0.0.1:8081"
+            # /api for systems: Kubernetes bearer tokens, TLS via service-ca
+            - name: RF2VC_API_LISTEN
+              value: ":8444"
+            - name: RF2VC_API_TLS_CERT
+              value: /etc/tls/private/tls.crt
+            - name: RF2VC_API_TLS_KEY
+              value: /etc/tls/private/tls.key
+            # per-BMH Redfish credentials (optional Secret rf2vc-redfish-clients)
+            - name: RF2VC_REDFISH_CLIENTS_DIR
+              value: /etc/rf2vc-redfish-clients
+            # "true" once every BMH uses its own credential
+            - name: RF2VC_REDFISH_DISABLE_SHARED
+              value: "false"
             - name: RF2VC_DATA_DIR
               value: "/data"
             - name: BUILD_VERSION
@@ -82,9 +95,18 @@ spec:
               readOnly: true
             - name: data
               mountPath: /data
+            - name: proxy-tls
+              mountPath: /etc/tls/private
+              readOnly: true
+            - name: redfish-clients
+              mountPath: /etc/rf2vc-redfish-clients
+              readOnly: true
           ports:
             - name: http
               containerPort: 8080
+              protocol: TCP
+            - name: api
+              containerPort: 8444
               protocol: TCP
           readinessProbe:
             httpGet:
@@ -170,3 +192,8 @@ spec:
         - name: htpasswd
           emptyDir:
             medium: Memory
+        # one key per BMH: key = Redfish username, value = password
+        - name: redfish-clients
+          secret:
+            secretName: rf2vc-redfish-clients
+            optional: true

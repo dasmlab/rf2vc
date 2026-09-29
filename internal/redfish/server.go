@@ -58,15 +58,17 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	// instead of …/redfish/v1/Systems/<uuid>. Rewrite bare-UUID paths.
 	if rewritten, ok := rewriteBareUUIDPath(p); ok {
 		activity.In(r.Method, r.URL.Path, map[string]any{
-			"remote":   r.RemoteAddr,
-			"ua":       r.UserAgent(),
-			"rewrote":  "/redfish/v1" + rewritten,
+			"remote":  r.RemoteAddr,
+			"ua":      r.UserAgent(),
+			"client":  clientFrom(r.Context()),
+			"rewrote": "/redfish/v1" + rewritten,
 		})
 		p = rewritten
 	} else {
 		activity.In(r.Method, r.URL.Path, map[string]any{
 			"remote": r.RemoteAddr,
 			"ua":     r.UserAgent(),
+			"client": clientFrom(r.Context()),
 		})
 	}
 
