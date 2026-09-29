@@ -109,6 +109,26 @@ async function refreshStatus() {
     `${st.version} · ${st.vcenters} vCenter · ${st.mappings} UUID${dry}`;
 }
 
+async function refreshWhoami() {
+  const el = $("#whoami");
+  if (!el) return;
+  try {
+    const me = await api("/api/v1/whoami");
+    if (!me.user) return;
+    el.textContent = me.user;
+    if (me.mode === "oauth") {
+      const out = document.createElement("a");
+      out.href = "/oauth/sign_out";
+      out.textContent = "Sign out";
+      out.className = "whoami-signout";
+      el.append(" · ", out);
+    }
+    el.classList.remove("hidden");
+  } catch (_) {
+    /* older gateway without /whoami */
+  }
+}
+
 function setPageView(view) {
   pageView = view === "activity" ? "activity" : "inventory";
   $("#viewInventory")?.classList.toggle("hidden", pageView !== "inventory");
@@ -944,3 +964,4 @@ $("#detailPane").addEventListener("click", async (e) => {
 reload().catch(err => {
   $("#statusLine").textContent = "API error: " + err.message;
 });
+refreshWhoami();

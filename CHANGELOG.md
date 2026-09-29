@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0] — 2026-09-29
+
+- **Dashboard login via the cluster IdP**: OpenShift oauth-proxy sidecar in front of the dashboard + `/api`, gated by RBAC (`rf2vc-ui-access` → Group `tdm-chips-admin`). The `rf2vc-gateway` Secret account stays as break-glass on the proxy sign-in page.
+- Gateway can serve the dashboard/API on a separate loopback listener (`uiListen` / `RF2VC_UI_LISTEN`); the main listener then serves only Redfish with Basic Auth.
+- Routes split on one host: `rf2vc` (UI, reencrypt) and `rf2vc-redfish` (`path: /redfish`, Basic Auth). BMH addresses and credentials are unchanged.
+- `GET /api/v1/whoami`, signed-in user + sign-out in the header, UI changes logged with the user.
+
 ## [1.0.34] — 2026-09-25
 
 - **EjectMedia**: on CD lock, set VMware force-unlock ExtraConfig (`cdrom.showIsoLockWarning=FALSE` + `msg.autoAnswer`) and retry detach **before** any power cycle; soft-off timeout 45s. Aims to eject while the guest stays up so Ironic's post-eject reboot is clean.

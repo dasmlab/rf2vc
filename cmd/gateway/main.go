@@ -25,7 +25,16 @@ var buildVersion = "dev"
 
 func main() {
 	cfgPath := flag.String("config", "configs/gateway.yaml", "path to gateway config YAML")
+	htpasswdOut := flag.String("write-htpasswd", "", "write a bcrypt htpasswd for RF2VC_AUTH_USERNAME/PASSWORD to this path and exit")
 	flag.Parse()
+
+	if *htpasswdOut != "" {
+		if err := writeHtpasswd(*htpasswdOut, os.Getenv("RF2VC_AUTH_USERNAME"), os.Getenv("RF2VC_AUTH_PASSWORD")); err != nil {
+			log.Fatalf("write-htpasswd: %v", err)
+		}
+		log.Printf("wrote %s", *htpasswdOut)
+		return
+	}
 
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
@@ -49,33 +58,59 @@ func main() {
 		pool.CloseAll(cctx)
 	}()
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+	healthz := func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
-	})
-
-	api.New(st, pool, buildVersion).Mount(mux)
-	redfish.NewServer(cfg, st, pool).Mount(mux)
-
-	staticFS, err := fs.Sub(web.Assets, "static")
-	if err != nil {
-		log.Fatalf("web static: %v", err)
 	}
-	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
-			http.NotFound(w, r)
-			return
-		}
-		b, err := web.Assets.ReadFile("index.html")
+	mountRedfish := func(mux *http.ServeMux) {
+		redfish.NewServer(cfg, st, pool).Mount(mux)
+	}
+	mountUI := func(mux *http.ServeMux, mode string) {
+		api.New(st, pool, buildVersion).Mount(mux)
+		mux.HandleFunc("/api/v1/whoami", whoami(mode))
+		staticFS, err := fs.Sub(web.Assets, "static")
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+			log.Fatalf("web static: %v", err)
 		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write(b)
-	})
+		mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/" {
+				http.NotFound(w, r)
+				return
+			}
+			b, err := web.Assets.ReadFile("index.html")
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write(b)
+		})
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", healthz)
+	mountRedfish(mux)
+	if cfg.UIListen == "" {
+		mountUI(mux, "basic")
+	} else {
+		warnIfNotLoopback(cfg.UIListen)
+		uiMux := http.NewServeMux()
+		uiMux.HandleFunc("/healthz", healthz)
+		mountUI(uiMux, "oauth")
+		uiSrv := &http.Server{
+			Addr:              cfg.UIListen,
+			Handler:           proxyAuth(uiMux),
+			ReadHeaderTimeout: 15 * time.Second,
+		}
+		go func() {
+			log.Printf("dashboard + API on %s (identity from oauth-proxy)", cfg.UIListen)
+			if err := uiSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("ui listen: %v", err)
+			}
+		}()
+		defer func() { _ = uiSrv.Close() }()
+	}
 
 	handler := basicAuth(cfg.Auth.Username, cfg.Auth.Password, mux)
 
@@ -114,46 +149,6 @@ func main() {
 	cctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(cctx)
-}
-
-func basicAuth(user, pass string, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" || strings.HasPrefix(r.URL.Path, "/healthz?") {
-			next.ServeHTTP(w, r)
-			return
-		}
-		// Redfish 7.2.3: ServiceRoot (/redfish/v1/) and /redfish must not require auth.
-		// Ironic/sushy probes these with no Authorization (python-requests) first.
-		if r.Method == http.MethodGet && isPublicRedfishRoot(r.URL.Path) {
-			next.ServeHTTP(w, r)
-			return
-		}
-		u, p, ok := r.BasicAuth()
-		if !ok || u != user || p != pass {
-			reason := "missing"
-			if ok {
-				if u != user {
-					reason = "bad-user"
-				} else {
-					reason = "bad-password"
-				}
-			}
-			// Log before rejecting — BMH 401s previously looked like "no traffic"
-			// because inbound activity only ran after auth succeeded.
-			activity.InErr("auth", "401 Unauthorized", map[string]any{
-				"method": r.Method,
-				"path":   r.URL.Path,
-				"remote": r.RemoteAddr,
-				"ua":     r.UserAgent(),
-				"reason": reason,
-				"user":   u, // attempted username only (never password)
-			})
-			w.Header().Set("WWW-Authenticate", `Basic realm="rf2vc"`)
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 // isPublicRedfishRoot matches the Redfish-mandated unauthenticated discovery paths.

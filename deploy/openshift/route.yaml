@@ -6,7 +6,30 @@ metadata:
   labels:
     app: rf2vc
 spec:
-  # Leave host empty for OpenShift to assign *.apps.<cluster>; or set explicitly.
+  # Both Routes must share one explicit host (path-based split). Set yours here.
+  host: rf2vc.apps.CHANGE-ME.example.com
+  to:
+    kind: Service
+    name: rf2vc
+    weight: 100
+  port:
+    targetPort: https
+  tls:
+    termination: reencrypt
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None
+---
+# Same host, /redfish straight to the gateway (Basic Auth) for Ironic/BMH.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: rf2vc-redfish
+  namespace: rf2vc-system
+  labels:
+    app: rf2vc
+spec:
+  host: rf2vc.apps.CHANGE-ME.example.com
+  path: /redfish
   to:
     kind: Service
     name: rf2vc

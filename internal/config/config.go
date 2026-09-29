@@ -8,7 +8,10 @@ import (
 )
 
 type Config struct {
-	Listen      string     `yaml:"listen"`
+	Listen string `yaml:"listen"`
+	// UIListen, when set, moves the dashboard + /api to a second listener (e.g.
+	// 127.0.0.1:8081 behind oauth-proxy); Listen then serves only Redfish.
+	UIListen    string     `yaml:"uiListen"`
 	TLSCertFile string     `yaml:"tlsCertFile"`
 	TLSKeyFile  string     `yaml:"tlsKeyFile"`
 	Auth        AuthConfig `yaml:"auth"`
@@ -49,6 +52,9 @@ func Load(path string) (*Config, error) {
 func applyEnvOverrides(c *Config) {
 	if v := os.Getenv("RF2VC_LISTEN"); v != "" {
 		c.Listen = v
+	}
+	if v := os.Getenv("RF2VC_UI_LISTEN"); v != "" {
+		c.UIListen = v
 	}
 	if v := os.Getenv("RF2VC_AUTH_USERNAME"); v != "" {
 		c.Auth.Username = v

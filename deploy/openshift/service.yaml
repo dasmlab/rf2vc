@@ -3,6 +3,8 @@ kind: Service
 metadata:
   name: rf2vc
   namespace: rf2vc-system
+  annotations:
+    service.beta.openshift.io/serving-cert-secret-name: rf2vc-tls
   labels:
     app: rf2vc
 spec:
@@ -13,4 +15,8 @@ spec:
     - name: http
       port: 8080
       targetPort: http
+      protocol: TCP
+    - name: https
+      port: 8443
+      targetPort: https
       protocol: TCP

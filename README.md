@@ -45,6 +45,26 @@ oc apply -k deploy/openshift/
 oc -n rf2vc-system get pods,route
 ```
 
+### Dashboard login (OpenShift IdP)
+
+The dashboard and `/api` sit behind the OpenShift **oauth-proxy** sidecar; `/redfish` does not.
+
+| Path | Route | Auth |
+|---|---|---|
+| `/`, `/static`, `/api/v1/*` | `rf2vc` (reencrypt → oauth-proxy :8443 → gateway `127.0.0.1:8081`) | OpenShift login, members of `tdm-chips-admin` |
+| `/redfish/*` | `rf2vc-redfish` (same host, `path: /redfish`, edge → gateway :8080) | Basic Auth (BMH credentials, unchanged) |
+
+- **Who gets in:** RBAC. The proxy runs `--openshift-sar` for `get services/rf2vc` in the namespace, and
+  Role/RoleBinding `rf2vc-ui-access` grants that to Group `tdm-chips-admin`. Add groups there.
+  Check the group exists: `oc get group tdm-chips-admin`.
+- **Break-glass:** the `rf2vc-gateway` Secret account also works on the proxy's sign-in page
+  (username/password form). An init container writes its bcrypt htpasswd (`rf2vc -write-htpasswd`).
+- **Audit:** the signed-in user is shown in the header, and UI changes are logged in Activity → Runtime
+  as `ui <METHOD> <path>` with the user.
+- Both Routes must use the same explicit `host` (set it in `deploy/openshift/route.yaml`).
+- Without `RF2VC_UI_LISTEN` / `uiListen` the gateway keeps the old single listener with Basic Auth
+  everywhere (local runs).
+
 BMH example (replace host + secret):
 
 ```yaml
@@ -63,9 +83,10 @@ make build && make run
 # UI: http://127.0.0.1:8080/  (basic auth)
 ```
 
-## API (basic auth)
+## API (OpenShift login via oauth-proxy; Basic Auth when running without it)
 
 - `GET /api/v1/status`
+- `GET /api/v1/whoami` — signed-in user (`mode`: `oauth` | `basic`)
 - `GET|POST /api/v1/vcenters`
 - `GET|PUT|DELETE /api/v1/vcenters/{id}`
 - `POST /api/v1/vcenters/{id}/test`

@@ -918,3 +918,8 @@ body.dry-run-on .dry-toggle {
   padding: 0.4rem 0.25rem;
 }
 .activity-grid { display: none; }
+
+.whoami-signout {
+  color: inherit;
+  font-weight: 500;
+}

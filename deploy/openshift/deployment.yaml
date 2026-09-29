@@ -19,6 +19,31 @@ spec:
       securityContext:
         fsGroup: 65532
         fsGroupChangePolicy: OnRootMismatch
+      initContainers:
+        # break-glass: bcrypt htpasswd from the rf2vc-gateway Secret for oauth-proxy's login form
+        - name: htpasswd
+          image: ghcr.io/dasmlab/rf2vc:v1.0.0
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+          args: ["-write-htpasswd", "/htpasswd/users"]
+          env:
+            - name: RF2VC_AUTH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: rf2vc-gateway
+                  key: auth-username
+            - name: RF2VC_AUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: rf2vc-gateway
+                  key: auth-password
+          volumeMounts:
+            - name: htpasswd
+              mountPath: /htpasswd
       containers:
         - name: rf2vc
           image: ghcr.io/dasmlab/rf2vc:v1.0.0
@@ -34,6 +59,9 @@ spec:
           env:
             - name: RF2VC_LISTEN
               value: ":8080"
+            # dashboard + /api only on loopback, reachable through oauth-proxy
+            - name: RF2VC_UI_LISTEN
+              value: "127.0.0.1:8081"
             - name: RF2VC_DATA_DIR
               value: "/data"
             - name: BUILD_VERSION
@@ -77,6 +105,58 @@ spec:
             limits:
               memory: "512Mi"
               cpu: "500m"
+        - name: oauth-proxy
+          image: registry.redhat.io/openshift4/ose-oauth-proxy-rhel9:v4.20
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+          args:
+            - --provider=openshift
+            - --https-address=:8443
+            - --http-address=
+            - --upstream=http://127.0.0.1:8081
+            - --openshift-service-account=rf2vc-sa
+            - '--openshift-sar={"namespace":"rf2vc-system","resource":"services","resourceName":"rf2vc","verb":"get"}'
+            - --htpasswd-file=/etc/proxy/htpasswd/users
+            - --pass-user-headers=true
+            - --tls-cert=/etc/tls/private/tls.crt
+            - --tls-key=/etc/tls/private/tls.key
+            - --cookie-secret-file=/etc/tls/private/tls.key
+            - --cookie-secure=true
+          ports:
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /oauth/healthz
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /oauth/healthz
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "10m"
+            limits:
+              memory: "128Mi"
+          volumeMounts:
+            - name: proxy-tls
+              mountPath: /etc/tls/private
+              readOnly: true
+            - name: htpasswd
+              mountPath: /etc/proxy/htpasswd
+              readOnly: true
       volumes:
         - name: config
           configMap:
@@ -84,3 +164,9 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: rf2vc-data
+        - name: proxy-tls
+          secret:
+            secretName: rf2vc-tls
+        - name: htpasswd
+          emptyDir:
+            medium: Memory
