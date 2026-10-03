@@ -158,7 +158,7 @@ spec:
         fsGroup: 65532
         fsGroupChangePolicy: OnRootMismatch
       initContainers:
-        # break-glass: bcrypt htpasswd from the rf2vc-gateway Secret for oauth-proxy's login form
+        # break-glass: bcrypt htpasswd from the rf2vc-gateway Secret + sign-in page templates for oauth-proxy
         - name: htpasswd
           image: ghcr.io/dasmlab/rf2vc:__VERSION__
           imagePullPolicy: Always
@@ -167,7 +167,7 @@ spec:
             runAsNonRoot: true
             runAsUser: 65532
             runAsGroup: 65532
-          args: ["-write-htpasswd", "/htpasswd/users"]
+          args: ["-write-htpasswd", "/htpasswd/users", "-write-oauth-templates", "/oauth-templates"]
           env:
             - name: RF2VC_AUTH_USERNAME
               valueFrom:
@@ -182,6 +182,8 @@ spec:
           volumeMounts:
             - name: htpasswd
               mountPath: /htpasswd
+            - name: oauth-templates
+              mountPath: /oauth-templates
       containers:
         - name: rf2vc
           image: ghcr.io/dasmlab/rf2vc:__VERSION__
@@ -281,6 +283,8 @@ spec:
             - --openshift-service-account=rf2vc-sa
             - '--openshift-sar={"namespace":"rf2vc-system","resource":"services","resourceName":"rf2vc","verb":"get"}'
             - --htpasswd-file=/etc/proxy/htpasswd/users
+            # sign-in page from the rf2vc image: IdP button, breakglass form behind its own button
+            - --custom-templates-dir=/etc/proxy/templates
             - --pass-user-headers=true
             - --tls-cert=/etc/tls/private/tls.crt
             - --tls-key=/etc/tls/private/tls.key
@@ -317,6 +321,9 @@ spec:
             - name: htpasswd
               mountPath: /etc/proxy/htpasswd
               readOnly: true
+            - name: oauth-templates
+              mountPath: /etc/proxy/templates
+              readOnly: true
       volumes:
         - name: config
           configMap:
@@ -330,6 +337,8 @@ spec:
         - name: htpasswd
           emptyDir:
             medium: Memory
+        - name: oauth-templates
+          emptyDir: {}
         # one key per BMH: key = Redfish username, value = password
         - name: redfish-clients
           secret:

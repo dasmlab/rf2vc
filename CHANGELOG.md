@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.2.2] — 2026-10-03
+
+- **Sign-in page: breakglass behind its own button**: the oauth-proxy page now shows only **Log in with OpenShift** plus a **Breakglass** button; the local username/password form is a separate view (`#breakglass`) with an emergency-use warning and a link back. A failed breakglass attempt stays on that view.
+- Templates (`web/oauth/sign_in.html`, `error.html`) ship in the rf2vc image; the existing init container writes them with `-write-oauth-templates` into an `emptyDir`, and oauth-proxy loads them via `--custom-templates-dir`.
+
 ## [1.2.1] — 2026-10-03
 
 - **Activity order toggle**: toolbar button switches between newest first (default) and oldest first; the choice is remembered in the browser. New lines arrive at the top in newest-first mode without jumping a reader who has scrolled down. Overlapping polls no longer render the same event twice.

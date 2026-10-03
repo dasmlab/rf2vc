@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/crypto/bcrypt"
@@ -16,6 +17,7 @@ import (
 	"github.com/dasmlab/rf2vc/internal/activity"
 	"github.com/dasmlab/rf2vc/internal/kubeauth"
 	"github.com/dasmlab/rf2vc/internal/redfish"
+	"github.com/dasmlab/rf2vc/web"
 )
 
 const (
@@ -178,6 +180,21 @@ func writeHtpasswd(path, user, pass string) error {
 		return err
 	}
 	return os.WriteFile(path, []byte(user+":"+string(hash)+"\n"), 0o600)
+}
+
+// writeOAuthTemplates writes the oauth-proxy sign-in page (IdP button, breakglass form
+// behind its own button) for --custom-templates-dir.
+func writeOAuthTemplates(dir string) error {
+	for _, name := range []string{"sign_in.html", "error.html"} {
+		b, err := web.OAuthTemplates.ReadFile("oauth/" + name)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), b, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func warnIfNotLoopback(addr string) {

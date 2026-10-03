@@ -81,8 +81,10 @@ People sign in with the cluster IdP; systems use ServiceAccount tokens; BMHs kee
   While BMHs still use the shared `rf2vc-gateway` account, Activity → Runtime warns
   "Redfish call used the shared account". Once none do, set `RF2VC_REDFISH_DISABLE_SHARED=true`:
   the shared account then stops working on `/redfish` (it remains break-glass for the dashboard).
-- **Break-glass:** the `rf2vc-gateway` Secret account also works on the proxy's sign-in page
-  (username/password form). An init container writes its bcrypt htpasswd (`rf2vc -write-htpasswd`).
+- **Break-glass:** the `rf2vc-gateway` Secret account also works on the proxy's sign-in page, behind
+  its **Breakglass** button (`#breakglass` view with the username/password form). An init container
+  writes its bcrypt htpasswd and the sign-in page templates from the image
+  (`rf2vc -write-htpasswd … -write-oauth-templates …`, proxy `--custom-templates-dir`).
 - **Audit:** the signed-in user is shown in the header. Changes are logged in Activity → Runtime as
   `ui <METHOD> <path>` (people) or `api <METHOD> <path>` (tokens) with the user; Redfish inbound
   entries carry `client` (the BMH credential).

@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"html/template"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -216,5 +218,43 @@ func TestWriteHtpasswd(t *testing.T) {
 	}
 	if err := writeHtpasswd(p, "", "x"); err == nil {
 		t.Fatal("want error for empty user")
+	}
+}
+
+// oauth-proxy parses both files at startup and exits on error; render them with its fields.
+func TestWriteOAuthTemplates(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeOAuthTemplates(dir); err != nil {
+		t.Fatal(err)
+	}
+	tpl, err := template.New("").ParseFiles(filepath.Join(dir, "sign_in.html"), filepath.Join(dir, "error.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	signIn := map[string]any{
+		"ProviderName": "OpenShift", "SignInMessage": "", "CustomLogin": true,
+		"Redirect": "/", "Version": "test", "ProxyPrefix": "/oauth", "Footer": "",
+	}
+	var out bytes.Buffer
+	if err := tpl.ExecuteTemplate(&out, "sign_in.html", signIn); err != nil {
+		t.Fatal(err)
+	}
+	page := out.String()
+	for _, want := range []string{`action="/oauth/start"`, `href="#breakglass"`, `action="/oauth/sign_in#breakglass"`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("sign_in.html missing %s", want)
+		}
+	}
+	out.Reset()
+	signIn["CustomLogin"] = false
+	if err := tpl.ExecuteTemplate(&out, "sign_in.html", signIn); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "breakglass") && strings.Contains(out.String(), `name="password"`) {
+		t.Error("breakglass form rendered without --htpasswd-file")
+	}
+	out.Reset()
+	if err := tpl.ExecuteTemplate(&out, "error.html", map[string]any{"Title": "403", "Message": "nope", "ProxyPrefix": "/oauth"}); err != nil {
+		t.Fatal(err)
 	}
 }

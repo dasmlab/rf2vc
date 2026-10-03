@@ -27,13 +27,22 @@ var buildVersion = "dev"
 func main() {
 	cfgPath := flag.String("config", "configs/gateway.yaml", "path to gateway config YAML")
 	htpasswdOut := flag.String("write-htpasswd", "", "write a bcrypt htpasswd for RF2VC_AUTH_USERNAME/PASSWORD to this path and exit")
+	templatesOut := flag.String("write-oauth-templates", "", "write oauth-proxy sign-in templates (sign_in.html, error.html) to this directory and exit")
 	flag.Parse()
 
-	if *htpasswdOut != "" {
-		if err := writeHtpasswd(*htpasswdOut, os.Getenv("RF2VC_AUTH_USERNAME"), os.Getenv("RF2VC_AUTH_PASSWORD")); err != nil {
-			log.Fatalf("write-htpasswd: %v", err)
+	if *htpasswdOut != "" || *templatesOut != "" {
+		if *htpasswdOut != "" {
+			if err := writeHtpasswd(*htpasswdOut, os.Getenv("RF2VC_AUTH_USERNAME"), os.Getenv("RF2VC_AUTH_PASSWORD")); err != nil {
+				log.Fatalf("write-htpasswd: %v", err)
+			}
+			log.Printf("wrote %s", *htpasswdOut)
 		}
-		log.Printf("wrote %s", *htpasswdOut)
+		if *templatesOut != "" {
+			if err := writeOAuthTemplates(*templatesOut); err != nil {
+				log.Fatalf("write-oauth-templates: %v", err)
+			}
+			log.Printf("wrote oauth-proxy templates to %s", *templatesOut)
+		}
 		return
 	}
 

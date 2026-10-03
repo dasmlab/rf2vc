@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>rf2vc · {{.Title}}</title>
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      font-family: "Source Sans 3", "Segoe UI", Helvetica, Arial, sans-serif;
+      color: #233241;
+      background: #f3f8f6;
+    }
+    .card {
+      width: min(440px, 92vw);
+      margin-top: 12vh;
+      align-self: flex-start;
+      padding: 2rem;
+      background: #fff;
+      border: 2px solid #cc4757;
+      border-radius: 18px;
+      text-align: center;
+    }
+    h1 { margin: 0 0 0.6rem; font-family: Georgia, serif; color: #cc4757; }
+    a { color: #1f6f62; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>{{.Title}}</h1>
+    <p>{{.Message}}</p>
+    <p><a href="{{.ProxyPrefix}}/sign_in">Back to log in</a></p>
+  </main>
+</body>
+</html>

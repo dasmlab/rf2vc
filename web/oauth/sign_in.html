@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>rf2vc · Log In</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      font-family: "Source Sans 3", "Segoe UI", Helvetica, Arial, sans-serif;
+      color: #233241;
+      background: radial-gradient(circle at 20% 10%, rgba(47, 143, 125, 0.16), transparent 45%), #f3f8f6;
+    }
+    .card {
+      width: min(440px, 92vw);
+      margin-top: 12vh;
+      padding: 2.2rem 2rem 1.8rem;
+      background: #fff;
+      border: 1px solid rgba(28, 52, 73, 0.14);
+      border-radius: 18px;
+      box-shadow: 0 14px 32px rgba(18, 40, 52, 0.1);
+      text-align: center;
+    }
+    .caps { margin: 0; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.14em; color: #5a6f80; }
+    h1 { margin: 0.2rem 0 0.1rem; font-family: Georgia, serif; font-size: 2.2rem; color: #12202c; }
+    .lede { margin: 0 0 1.6rem; color: #3d5263; }
+    .btn {
+      display: inline-block;
+      width: 100%;
+      padding: 0.75rem 1rem;
+      border-radius: 999px;
+      font: inherit;
+      font-weight: 700;
+      font-size: 1rem;
+      text-decoration: none;
+      cursor: pointer;
+      border: 2px solid transparent;
+    }
+    .btn-primary { background: #2f8f7d; color: #fff; }
+    .btn-primary:hover { background: #1f6f62; }
+    .btn-breakglass {
+      margin-top: 1.4rem;
+      width: auto;
+      padding: 0.45rem 1.1rem;
+      font-size: 0.85rem;
+      background: #fff;
+      color: #cc4757;
+      border-color: rgba(204, 71, 87, 0.45);
+    }
+    .btn-breakglass:hover { background: #fdecee; border-color: #cc4757; }
+    .btn-local { background: #cc4757; color: #fff; }
+    .btn-local:hover { background: #a83646; }
+    .msg { margin: 0 0 1rem; color: #3d5263; }
+    .warn {
+      margin: 0 0 1.2rem;
+      padding: 0.7rem 0.9rem;
+      border: 2px solid #cc4757;
+      border-radius: 14px;
+      background: #fdecee;
+      color: #cc4757;
+      font-weight: 700;
+      text-align: left;
+    }
+    form.local { text-align: left; }
+    label { display: block; margin: 0 0 0.9rem; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em; color: #5a6f80; }
+    input[type=text], input[type=password] {
+      display: block;
+      width: 100%;
+      margin-top: 0.3rem;
+      padding: 0.6rem 0.75rem;
+      font: inherit;
+      font-size: 1rem;
+      border: 1px solid rgba(28, 52, 73, 0.25);
+      border-radius: 10px;
+    }
+    input:focus { outline: 2px solid #2f8f7d; outline-offset: 1px; }
+    .back { display: inline-block; margin-top: 1rem; color: #1f6f62; font-weight: 600; }
+    footer { margin: 1.4rem 0; font-size: 0.75rem; color: #5a6f80; }
+    footer a { color: inherit; }
+    /* Two views on one page: #breakglass shows only the local form. */
+    #breakglass { display: none; }
+    #breakglass:target { display: block; }
+    #breakglass:target ~ #idp { display: none; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <p class="caps">DASMLAB · tools</p>
+    <h1>rf2vc</h1>
+    {{ if .CustomLogin }}
+    <section id="breakglass">
+      <p class="lede">Breakglass login</p>
+      <p class="warn">Emergency local account. Use only when OpenShift login is unavailable.</p>
+      <form class="local" method="POST" action="{{.ProxyPrefix}}/sign_in#breakglass">
+        <input type="hidden" name="rd" value="{{.Redirect}}">
+        <label>Username <input type="text" name="username" autocomplete="username" autofocus></label>
+        <label>Password <input type="password" name="password" autocomplete="current-password"></label>
+        <button type="submit" class="btn btn-local">Log in (breakglass)</button>
+      </form>
+      <a class="back" href="#">← Back to OpenShift login</a>
+    </section>
+    {{ end }}
+    <section id="idp">
+      <p class="lede">Redfish to vSphere.</p>
+      <form method="GET" action="{{.ProxyPrefix}}/start">
+        <input type="hidden" name="rd" value="{{.Redirect}}">
+        {{ if .SignInMessage }}<p class="msg">{{.SignInMessage}}</p>{{ end }}
+        <button type="submit" class="btn btn-primary">Log in with OpenShift</button>
+      </form>
+      {{ if .CustomLogin }}<a class="btn btn-breakglass" href="#breakglass">Breakglass</a>{{ end }}
+    </section>
+  </main>
+  <footer>
+    {{ if eq .Footer "-" }}
+    {{ else if eq .Footer "" }}Secured with <a href="https://github.com/openshift/oauth-proxy">OpenShift oauth-proxy</a>
+    {{ else }}{{.Footer}}{{ end }}
+  </footer>
+  <script>
+    // Keep a deep link (#fragment) through login, but not our own view switch.
+    if (window.location.hash && window.location.hash !== "#breakglass") {
+      var inputs = document.getElementsByName("rd");
+      for (var i = 0; i < inputs.length; i++) inputs[i].value += window.location.hash;
+    }
+  </script>
+</body>
+</html>
