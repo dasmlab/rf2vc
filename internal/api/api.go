@@ -251,7 +251,7 @@ func (s *Server) testVCenterBody(w http.ResponseWriter, r *http.Request, vc stor
 			OK:    false,
 			Error: "url, username, password, and datacenter are required to test",
 			Checks: []vsphere.CheckResult{
-				{Name: "Login", OK: false, Detail: "missing required fields"},
+				{Name: "Settings", OK: false, Detail: "missing required fields"},
 			},
 		})
 		return

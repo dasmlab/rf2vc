@@ -77,6 +77,7 @@ let activityTimer = null;
 const activityLastId = { inbound: 0, runtime: 0, outbound: 0 };
 /** @type {'inbound'|'runtime'|'outbound'} */
 let activityTab = "inbound";
+let activityNewestFirst = localStorage.getItem("rf2vc.activityOrder") !== "oldest";
 
 function mappingsFor(vcId) {
   return mappings.filter(m => m.vcenterId === vcId);
@@ -181,7 +182,8 @@ function renderActivityChannel(el, events, replace) {
     el.innerHTML = `<div class="activity-empty">No events yet.</div>`;
     return;
   }
-  const html = events.map(ev => {
+  const ordered = activityNewestFirst ? events.slice().reverse() : events;
+  const html = ordered.map(ev => {
     const detail = ev.detail ? ` ${escapeHtml(JSON.stringify(ev.detail))}` : "";
     return `<div class="activity-line level-${escapeHtml(ev.level || "info")}${ev.dryRun ? " dry" : ""}">
       <span class="t">${escapeHtml(formatActivityTime(ev.ts))}</span>
@@ -189,11 +191,36 @@ function renderActivityChannel(el, events, replace) {
       <span class="m">${escapeHtml(ev.message || "")}${detail}</span>
     </div>`;
   }).join("");
-  if (replace) el.innerHTML = html;
-  else {
+  if (replace) {
+    el.innerHTML = html;
+    el.scrollTop = activityNewestFirst ? 0 : el.scrollHeight;
+    return;
+  }
+  el.querySelector(".activity-empty")?.remove();
+  if (activityNewestFirst) {
+    // Keep a reader who scrolled down anchored on the lines they are reading.
+    const atTop = el.scrollTop < 8;
+    const before = el.scrollHeight;
+    el.insertAdjacentHTML("afterbegin", html);
+    if (!atTop) el.scrollTop += el.scrollHeight - before;
+  } else {
     el.insertAdjacentHTML("beforeend", html);
     el.scrollTop = el.scrollHeight;
   }
+}
+
+function syncActivityOrderButton() {
+  const btn = $("#btnActivityOrder");
+  if (!btn) return;
+  btn.textContent = activityNewestFirst ? "Newest first ↓" : "Oldest first ↓";
+  btn.setAttribute("aria-pressed", activityNewestFirst ? "true" : "false");
+}
+
+function toggleActivityOrder() {
+  activityNewestFirst = !activityNewestFirst;
+  localStorage.setItem("rf2vc.activityOrder", activityNewestFirst ? "newest" : "oldest");
+  syncActivityOrderButton();
+  refreshActivity(true);
 }
 
 async function refreshActivity(full) {
@@ -208,7 +235,9 @@ async function refreshActivity(full) {
       : `/api/v1/activity?channel=${ch}&after=${activityLastId[ch]}&limit=100`;
     try {
       const res = await api(q);
-      const events = res.events || [];
+      let events = res.events || [];
+      // Polls can overlap a full reload (tab switch, order toggle); never render an id twice.
+      if (!full) events = events.filter(ev => ev.id > activityLastId[ch]);
       if (!events.length) {
         if (full) renderActivityChannel($("#" + id), [], true);
         return;
@@ -376,7 +405,7 @@ function showVCView(vc) {
     </div>
 
     <div class="tab-panel ${tab === "uuids" ? "" : "hidden"}" id="tabUuids">
-      <p class="detail-meta" id="folderVmSummary">Loading folder VMs…</p>
+      <p class="detail-meta folder-summary" id="folderVmSummary">Loading folder VMs…</p>
       <div class="uuid-list" id="uuidList"></div>
       <form class="bind-form" id="bindForm">
         <label>BIOS UUID <input name="uuid" required placeholder="4235a1b2-… (add even if not listed)" /></label>
@@ -530,7 +559,12 @@ async function loadUUIDTab(vc) {
       folderMsg = `Folder scan failed: ${err.message}`;
     }
   }
-  if (summary) summary.textContent = folderMsg;
+  if (summary) {
+    const failed = folderMsg.startsWith("Folder scan failed");
+    summary.textContent = folderMsg;
+    summary.classList.toggle("error-box", failed);
+    summary.classList.toggle("warn-box", !failed && (!vc.folder || discovered.length === 0));
+  }
   const rows = mergeUUIDRows(mapped, discovered);
   const countEl = $("#uuidTabCount");
   if (countEl) countEl.textContent = `(${rows.length})`;
@@ -602,21 +636,23 @@ async function loadHealth(vcId) {
       lightHTML(h.connection, "Connection") +
       lightHTML(h.isoCache, "ISO cache");
     if (checks) {
-      const connOk = h.connection === "green";
-      const connWarn = h.connection === "yellow";
-      const isoOk = h.isoCache === "green";
-      const isoWarn = h.isoCache === "yellow";
+      // Yellow also covers failed logins (e.g. expired session); only "connected…" means login worked.
+      const connected = h.connection === "green" || /^connected/i.test(h.connectionDetail || "");
+      const isoOk = h.isoCache === "green" || (h.isoCache === "yellow" && connected);
       const folderSet = !!(h.folderPath || h.folderOk);
+      const folderOk = !!h.folderOk && connected;
       checks.innerHTML =
-        healthCheckHTML(connOk || connWarn, false, "Login / datacenter", h.connectionDetail || h.connection) +
-        healthCheckHTML(!!h.folderOk, !folderSet && !h.folderPath, "VM folder",
-          h.folderPath ? (h.folderOk ? h.folderPath : (h.connectionDetail || "folder issue")) : "not set") +
-        healthCheckHTML(isoOk || isoWarn, false, "ISO / datastore", h.isoCacheDetail || h.isoCache);
+        healthCheckHTML(connected, false, "Login / datacenter", h.connectionDetail || h.connection) +
+        healthCheckHTML(folderOk, !folderSet && !h.folderPath, "VM folder",
+          h.folderPath ? (folderOk ? h.folderPath : (h.connectionDetail || "folder issue")) : "not set") +
+        healthCheckHTML(isoOk, false, "ISO / datastore", h.isoCacheDetail || h.isoCache);
+      checks.classList.toggle("has-error", !!checks.querySelector(".health-check.err"));
     }
   } catch (err) {
     row.innerHTML = lightHTML("red", "Connection") + lightHTML("red", "ISO cache");
     if (checks) {
       checks.innerHTML = healthCheckHTML(false, false, "Health", err.message);
+      checks.classList.add("has-error");
     }
   }
 }
@@ -771,6 +807,9 @@ document.querySelectorAll("[data-activity-tab]").forEach(btn => {
     refreshActivity(false);
   });
 });
+
+$("#btnActivityOrder")?.addEventListener("click", toggleActivityOrder);
+syncActivityOrderButton();
 
 async function onDryRunToggle(e) {
   const on = e.target.checked;

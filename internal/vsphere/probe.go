@@ -7,7 +7,9 @@ import (
 	"strings"
 
 	"github.com/vmware/govmomi/object"
+	"github.com/vmware/govmomi/vim25"
 	"github.com/vmware/govmomi/vim25/mo"
+	"github.com/vmware/govmomi/vim25/soap"
 	"github.com/vmware/govmomi/vim25/types"
 )
 
@@ -344,22 +346,46 @@ func appendCheck(checks *[]CheckResult, name string, ok, skip bool, detail strin
 	*checks = append(*checks, CheckResult{Name: name, OK: ok, Skip: skip, Detail: detail})
 }
 
-// RunConnectionTest probes login → datacenter → datastore → folder → ISO folder.
+// probeEndpoint checks that the vSphere API answers (ServiceContent needs no login).
+func probeEndpoint(ctx context.Context, ep Endpoint) (string, error) {
+	u, err := soap.ParseURL(ep.URL)
+	if err != nil {
+		return "", fmt.Errorf("parse vsphere url: %w", err)
+	}
+	vc, err := vim25.NewClient(ctx, soap.NewClient(u, ep.Insecure))
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s reachable · %s", u.Host, vc.ServiceContent.About.FullName), nil
+}
+
+// RunConnectionTest probes endpoint → login → datacenter → datastore → folder → ISO folder.
 // Datastore may be unset (skipped); folder listing still works without it.
 func RunConnectionTest(ctx context.Context, ep Endpoint) ConnectionTest {
+	const endpointCheck, loginCheck = "vCenter endpoint", "Login (credentials)"
 	ep.Datastore = NormalizeDatastore(ep.Datastore)
-	out := ConnectionTest{Checks: make([]CheckResult, 0, 5)}
+	out := ConnectionTest{Checks: make([]CheckResult, 0, 6)}
 
 	if ep.URL == "" || ep.Username == "" || ep.Password == "" || ep.Datacenter == "" {
 		out.Error = "url, username, password, and datacenter are required to test"
-		appendCheck(&out.Checks, "Login", false, false, out.Error)
+		appendCheck(&out.Checks, "Settings", false, false, out.Error)
 		return out
 	}
+
+	reach, err := probeEndpoint(ctx, ep)
+	if err != nil {
+		out.Error = err.Error()
+		appendCheck(&out.Checks, endpointCheck, false, false, err.Error())
+		appendCheck(&out.Checks, loginCheck, false, true, "not tried — endpoint unreachable")
+		return out
+	}
+	appendCheck(&out.Checks, endpointCheck, true, false, reach)
+	authed := "authenticated as " + ep.Username
 
 	c, err := NewClient(ep)
 	if err != nil {
 		out.Error = err.Error()
-		appendCheck(&out.Checks, "Login", false, false, err.Error())
+		appendCheck(&out.Checks, loginCheck, false, false, err.Error())
 		return out
 	}
 	defer func() { _ = c.Close(ctx) }()
@@ -369,19 +395,19 @@ func RunConnectionTest(ctx context.Context, ep Endpoint) ConnectionTest {
 		out.Error = msg
 		lower := strings.ToLower(msg)
 		if strings.Contains(lower, "datacenter") {
-			appendCheck(&out.Checks, "Login", true, false, "authenticated")
+			appendCheck(&out.Checks, loginCheck, true, false, authed)
 			appendCheck(&out.Checks, "Datacenter", false, false, msg)
 		} else if strings.Contains(lower, "datastore") {
-			appendCheck(&out.Checks, "Login", true, false, "authenticated")
+			appendCheck(&out.Checks, loginCheck, true, false, authed)
 			appendCheck(&out.Checks, "Datacenter", true, false, ep.Datacenter)
 			appendCheck(&out.Checks, "Datastore", false, false, msg)
 		} else {
-			appendCheck(&out.Checks, "Login", false, false, msg)
+			appendCheck(&out.Checks, loginCheck, false, false, msg)
 		}
 		return out
 	}
 
-	appendCheck(&out.Checks, "Login", true, false, "authenticated")
+	appendCheck(&out.Checks, loginCheck, true, false, authed)
 	appendCheck(&out.Checks, "Datacenter", true, false, ep.Datacenter)
 
 	if ep.Datastore == "" {

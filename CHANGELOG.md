@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1] — 2026-10-03
+
+- **Activity order toggle**: toolbar button switches between newest first (default) and oldest first; the choice is remembered in the browser. New lines arrive at the top in newest-first mode without jumping a reader who has scrolled down. Overlapping polls no longer render the same event twice.
+- **vCenter errors stand out**: failed health checks, folder-scan failures and error messages in the vCenter panel are shown big, bold and red inside a red rounded box. A failed login/datacenter (e.g. expired vSphere session) is now marked ✗ instead of ✓ — the probe reports it as yellow, which the UI used to count as passing.
+- **Folder status line (UUIDs tab) is always boxed**: teal when the scan is OK, amber for "Folder not set" / no VMs, red for any scan failure — this is where a stale vSphere session (`NotAuthenticated`) shows up at runtime, while the health checks still log in fresh and stay green.
+- **Test checklist splits reachability from login**: new `vCenter endpoint` check (vSphere API answers, shows host + vCenter version, no credentials used) before `Login (credentials)` ("authenticated as <user>"). An unreachable vCenter now fails the endpoint check and skips login instead of reporting a login failure. Missing form fields are reported as `Settings`.
+
 ## [1.2.0] — 2026-09-29
 
 - **System callers on `/api` use ServiceAccount tokens**: new TLS listener `:8444` (`apiListen` / `RF2VC_API_LISTEN`, service-ca cert, Service port `api`). Tokens are checked with SelfSubjectReview + SelfSubjectAccessReview using the caller's own token against Role `rf2vc-ui-access` (no `system:auth-delegator` needed). ServiceAccount `rf2vc-api-client` + RoleBinding `rf2vc-api-clients` added.
