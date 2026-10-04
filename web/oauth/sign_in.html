@@ -25,7 +25,20 @@
       border-radius: 18px;
       box-shadow: 0 14px 32px rgba(18, 40, 52, 0.1);
       text-align: center;
+      position: relative;
     }
+    .lang-toggle {
+      position: absolute; top: 0.8rem; right: 0.8rem;
+      display: inline-flex; overflow: hidden;
+      border: 1.5px solid rgba(31, 111, 98, 0.38); border-radius: 999px;
+    }
+    .lang-toggle button {
+      border: 0; background: #fff; color: #3d5263; cursor: pointer;
+      font: 700 0.72rem/1 "Source Sans 3", "Segoe UI", sans-serif; letter-spacing: 0.06em;
+      padding: 0.36rem 0.62rem;
+    }
+    .lang-toggle button + button { border-left: 1px solid rgba(28, 52, 73, 0.14); }
+    .lang-toggle button.active { background: #2f8f7d; color: #fff; }
     .caps { margin: 0; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.14em; color: #5a6f80; }
     h1 { margin: 0.2rem 0 0.1rem; font-family: Georgia, serif; font-size: 2.2rem; color: #12202c; }
     .lede { margin: 0 0 1.6rem; color: #3d5263; }
@@ -90,34 +103,38 @@
 </head>
 <body>
   <main class="card">
-    <p class="caps">DASMLAB · tools</p>
+    <div class="lang-toggle" role="group" aria-label="Language">
+      <button type="button" data-lang="en" lang="en" title="English">EN</button>
+      <button type="button" data-lang="fr-CA" lang="fr-CA" title="Français (Québec)">FR-CA</button>
+    </div>
+    <p class="caps" data-i18n="caps">DASMLAB · tools</p>
     <h1>rf2vc</h1>
     {{ if .CustomLogin }}
     <section id="breakglass">
-      <p class="lede">Breakglass login</p>
-      <p class="warn">Emergency local account. Use only when OpenShift login is unavailable.</p>
+      <p class="lede" data-i18n="bgTitle">Breakglass login</p>
+      <p class="warn" data-i18n="bgWarn">Emergency local account. Use only when OpenShift login is unavailable.</p>
       <form class="local" method="POST" action="{{.ProxyPrefix}}/sign_in#breakglass">
         <input type="hidden" name="rd" value="{{.Redirect}}">
-        <label>Username <input type="text" name="username" autocomplete="username" autofocus></label>
-        <label>Password <input type="password" name="password" autocomplete="current-password"></label>
-        <button type="submit" class="btn btn-local">Log in (breakglass)</button>
+        <label><span data-i18n="user">Username</span> <input type="text" name="username" autocomplete="username" autofocus></label>
+        <label><span data-i18n="pass">Password</span> <input type="password" name="password" autocomplete="current-password"></label>
+        <button type="submit" class="btn btn-local" data-i18n="bgSubmit">Log in (breakglass)</button>
       </form>
-      <a class="back" href="#">← Back to OpenShift login</a>
+      <a class="back" href="#" data-i18n="back">← Back to OpenShift login</a>
     </section>
     {{ end }}
     <section id="idp">
-      <p class="lede">Redfish to vSphere.</p>
+      <p class="lede" data-i18n="lede">Redfish to vSphere.</p>
       <form method="GET" action="{{.ProxyPrefix}}/start">
         <input type="hidden" name="rd" value="{{.Redirect}}">
         {{ if .SignInMessage }}<p class="msg">{{.SignInMessage}}</p>{{ end }}
-        <button type="submit" class="btn btn-primary">Log in with OpenShift</button>
+        <button type="submit" class="btn btn-primary" data-i18n="ocp">Log in with OpenShift</button>
       </form>
-      {{ if .CustomLogin }}<a class="btn btn-breakglass" href="#breakglass">Breakglass</a>{{ end }}
+      {{ if .CustomLogin }}<a class="btn btn-breakglass" href="#breakglass" data-i18n="bg">Breakglass</a>{{ end }}
     </section>
   </main>
   <footer>
     {{ if eq .Footer "-" }}
-    {{ else if eq .Footer "" }}Secured with <a href="https://github.com/openshift/oauth-proxy">OpenShift oauth-proxy</a>
+    {{ else if eq .Footer "" }}<span data-i18n="secured">Secured with</span> <a href="https://github.com/openshift/oauth-proxy">OpenShift oauth-proxy</a>
     {{ else }}{{.Footer}}{{ end }}
   </footer>
   <script>
@@ -126,6 +143,48 @@
       var inputs = document.getElementsByName("rd");
       for (var i = 0; i < inputs.length; i++) inputs[i].value += window.location.hash;
     }
+    // Same key as the rf2vc UI, so the choice carries across login.
+    (function () {
+      var T = {
+        en: {
+          caps: "DASMLAB · tools", title: "rf2vc · Log In", lede: "Redfish to vSphere.", ocp: "Log in with OpenShift",
+          bg: "Breakglass", bgTitle: "Breakglass login",
+          bgWarn: "Emergency local account. Use only when OpenShift login is unavailable.",
+          user: "Username", pass: "Password", bgSubmit: "Log in (breakglass)",
+          back: "← Back to OpenShift login", secured: "Secured with", aria: "Language"
+        },
+        "fr-CA": {
+          caps: "DASMLAB · outils", title: "rf2vc · Connexion", lede: "De Redfish à vSphere.", ocp: "Se connecter avec OpenShift",
+          bg: "Bris de glace", bgTitle: "Connexion bris de glace",
+          bgWarn: "Compte local d'urgence. À utiliser seulement quand la connexion OpenShift est indisponible.",
+          user: "Nom d'utilisateur", pass: "Mot de passe", bgSubmit: "Se connecter (bris de glace)",
+          back: "← Retour à la connexion OpenShift", secured: "Sécurisé par", aria: "Langue"
+        }
+      };
+      var KEY = "rf2vc.lang", lang;
+      try { lang = localStorage.getItem(KEY); } catch (e) {}
+      if (!T[lang]) lang = /^fr/i.test(navigator.language || "") ? "fr-CA" : "en";
+      function apply(next) {
+        lang = T[next] ? next : "en";
+        try { localStorage.setItem(KEY, lang); } catch (e) {}
+        document.documentElement.lang = lang;
+        document.title = T[lang].title;
+        var els = document.querySelectorAll("[data-i18n]");
+        for (var i = 0; i < els.length; i++) els[i].textContent = T[lang][els[i].getAttribute("data-i18n")];
+        var btns = document.querySelectorAll("[data-lang]");
+        for (var j = 0; j < btns.length; j++) {
+          var on = btns[j].getAttribute("data-lang") === lang;
+          btns[j].className = on ? "active" : "";
+          btns[j].setAttribute("aria-pressed", on ? "true" : "false");
+        }
+        document.querySelector(".lang-toggle").setAttribute("aria-label", T[lang].aria);
+      }
+      var btns = document.querySelectorAll("[data-lang]");
+      for (var k = 0; k < btns.length; k++) {
+        btns[k].addEventListener("click", function () { apply(this.getAttribute("data-lang")); });
+      }
+      apply(lang);
+    })();
   </script>
 </body>
 </html>

@@ -32,7 +32,24 @@
   <main class="card">
     <h1>{{.Title}}</h1>
     <p>{{.Message}}</p>
-    <p><a href="{{.ProxyPrefix}}/sign_in">Back to log in</a></p>
+    <p><a href="{{.ProxyPrefix}}/sign_in" id="back">Back to log in</a></p>
   </main>
+  <script>
+    (function () {
+      var lang;
+      try { lang = localStorage.getItem("rf2vc.lang"); } catch (e) {}
+      if (!lang) lang = /^fr/i.test(navigator.language || "") ? "fr-CA" : "en";
+      if (lang !== "fr-CA") return;
+      document.documentElement.lang = "fr-CA";
+      document.getElementById("back").textContent = "Retour à la connexion";
+      var titles = {
+        "Internal Error": "Erreur interne", "Forbidden": "Accès refusé",
+        "Not Found": "Introuvable", "Unauthorized": "Non autorisé", "Bad Request": "Requête invalide"
+      };
+      var h1 = document.querySelector("h1");
+      var fr = titles[h1.textContent.trim()];
+      if (fr) { h1.textContent = fr; document.title = "rf2vc · " + fr; }
+    })();
+  </script>
 </body>
 </html>

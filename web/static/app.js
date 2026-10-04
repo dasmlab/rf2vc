@@ -30,7 +30,7 @@ function setMsg(el, text, ok) {
 
 function dsLabel(ds) {
   const s = String(ds || "").trim();
-  if (!s || /^(none|notset|not set|n\/a|na|-)$/i.test(s)) return "datastore not set";
+  if (!s || /^(none|notset|not set|n\/a|na|-)$/i.test(s)) return t("ds.notSet");
   return s;
 }
 
@@ -41,17 +41,17 @@ function showTestModal(res) {
   if (!modal || !summary || !list) return;
   const ok = !!res?.ok;
   summary.textContent = ok
-    ? "All required checks passed."
-    : (res?.error || "One or more checks failed.");
+    ? t("test.allOk")
+    : (tServer(res?.error) || t("test.someFailed"));
   summary.className = "detail-meta " + (ok ? "msg ok" : "msg err");
   const checks = res?.checks || [];
   list.innerHTML = checks.length
     ? checks.map(ch => {
         const tone = ch.skip ? "skip" : (ch.ok ? "ok" : "err");
         const mark = ch.skip ? "—" : (ch.ok ? "✓" : "✗");
-        return `<li class="check-row ${tone}"><span class="mark">${mark}</span><span class="name">${escapeHtml(ch.name)}</span><span class="detail">${escapeHtml(ch.detail || "")}</span></li>`;
+        return `<li class="check-row ${tone}"><span class="mark">${mark}</span><span class="name">${escapeHtml(tCheckName(ch.name))}</span><span class="detail">${escapeHtml(tServer(ch.detail || ""))}</span></li>`;
       }).join("")
-    : `<li class="check-row err"><span class="mark">✗</span><span class="name">Test</span><span class="detail">${escapeHtml(res?.error || "no result")}</span></li>`;
+    : `<li class="check-row err"><span class="mark">✗</span><span class="name">${escapeHtml(t("test.name"))}</span><span class="detail">${escapeHtml(tServer(res?.error) || t("test.noResult"))}</span></li>`;
   modal.classList.remove("hidden");
 }
 
@@ -105,9 +105,9 @@ async function refreshStatus() {
   const st = await api("/api/v1/status");
   globalDryRun = !!st.dryRun;
   syncDryRunToggles();
-  const dry = globalDryRun ? " · DRY-RUN" : "";
+  const dry = globalDryRun ? t("status.dry") : "";
   $("#statusLine").textContent =
-    `${st.version} · ${st.vcenters} vCenter · ${st.mappings} UUID${dry}`;
+    t("status.line", { version: st.version, vc: st.vcenters, uuids: st.mappings }) + dry;
 }
 
 async function refreshWhoami() {
@@ -120,7 +120,7 @@ async function refreshWhoami() {
     if (me.mode === "oauth") {
       const out = document.createElement("a");
       out.href = "/oauth/sign_out";
-      out.textContent = "Sign out";
+      out.textContent = t("whoami.signout");
       out.className = "whoami-signout";
       el.append(" · ", out);
     }
@@ -179,7 +179,7 @@ function renderActivityChannel(el, events, replace) {
   if (!el) return;
   if (replace) el.innerHTML = "";
   if (!events.length && replace) {
-    el.innerHTML = `<div class="activity-empty">No events yet.</div>`;
+    el.innerHTML = `<div class="activity-empty">${escapeHtml(t("act.empty"))}</div>`;
     return;
   }
   const ordered = activityNewestFirst ? events.slice().reverse() : events;
@@ -212,7 +212,7 @@ function renderActivityChannel(el, events, replace) {
 function syncActivityOrderButton() {
   const btn = $("#btnActivityOrder");
   if (!btn) return;
-  btn.textContent = activityNewestFirst ? "Newest first ↓" : "Oldest first ↓";
+  btn.textContent = t(activityNewestFirst ? "act.newest" : "act.oldest");
   btn.setAttribute("aria-pressed", activityNewestFirst ? "true" : "false");
 }
 
@@ -254,21 +254,21 @@ async function refreshActivity(full) {
 function renderVCList() {
   const box = $("#vcList");
   if (!vcenters.length) {
-    box.innerHTML = `<div class="vc-empty">No vCenters yet.<br/>Click <strong>Add</strong> to create one.</div>`;
+    box.innerHTML = `<div class="vc-empty">${t("inv.none")}</div>`;
     return;
   }
   box.innerHTML = vcenters.map(vc => {
     const n = mappingsFor(vc.id).length;
     const active = ui && (ui.id === vc.id || (ui.mode === "edit" && ui.id === vc.id));
     const dry = vc.dryRun || globalDryRun
-      ? `<span class="pill-tag dry">dry-run</span>`
+      ? `<span class="pill-tag dry">${escapeHtml(t("dry.tag"))}</span>`
       : "";
     return `
       <button type="button" class="vc-item ${active ? "active" : ""}" data-select="${vc.id}">
         <div class="name">${escapeHtml(vc.name)} ${dry}</div>
         <p class="meta">${escapeHtml(vc.url)}</p>
         <p class="meta">${escapeHtml(vc.datacenter)} / ${escapeHtml(dsLabel(vc.datastore))}</p>
-        <span class="count">${n} UUID${n === 1 ? "" : "s"}</span>
+        <span class="count">${escapeHtml(t("inv.uuidCount", { n }))}</span>
       </button>`;
   }).join("");
 }
@@ -277,13 +277,15 @@ function emptyDetail() {
   $("#detailBody").innerHTML = `
     <div class="empty-state">
       <div class="ph-icon" aria-hidden="true"></div>
-      <p class="empty-title">Select a vCenter</p>
-      <p>Pick one on the left to see its UUIDs, edit connection settings, or bind a new system.</p>
+      <p class="empty-title">${escapeHtml(t("empty.title"))}</p>
+      <p>${escapeHtml(t("empty.body"))}</p>
     </div>`;
 }
 
 function cloneVCForm() {
-  return $("#tplVCForm").content.firstElementChild.cloneNode(true);
+  const form = $("#tplVCForm").content.firstElementChild.cloneNode(true);
+  applyStaticI18n(form);
+  return form;
 }
 
 function fillVCForm(form, vc) {
@@ -323,9 +325,9 @@ function showCreateForm() {
   $("#detailBody").innerHTML = `
     <div class="detail-head">
       <div>
-        <p class="caps">New endpoint</p>
-        <h2 class="detail-title">Add vCenter</h2>
-        <p class="detail-meta">GOVC-shaped fields. Credentials persist on the PVC map.</p>
+        <p class="caps" data-i18n="create.caps">${escapeHtml(t("create.caps"))}</p>
+        <h2 class="detail-title" data-i18n="create.title">${escapeHtml(t("create.title"))}</h2>
+        <p class="detail-meta" data-i18n="create.meta">${escapeHtml(t("create.meta"))}</p>
       </div>
     </div>`;
   $("#detailBody").appendChild(form);
@@ -340,9 +342,9 @@ function showEditForm(vc) {
   $("#detailBody").innerHTML = `
     <div class="detail-head">
       <div>
-        <p class="caps">Edit endpoint</p>
+        <p class="caps" data-i18n="edit.caps">${escapeHtml(t("edit.caps"))}</p>
         <h2 class="detail-title">${escapeHtml(vc.name)}</h2>
-        <p class="detail-meta">Leave password blank to keep the stored secret.</p>
+        <p class="detail-meta" data-i18n="edit.meta">${escapeHtml(t("edit.meta"))}</p>
       </div>
     </div>`;
   $("#detailBody").appendChild(form);
@@ -350,8 +352,8 @@ function showEditForm(vc) {
 }
 
 function lightHTML(tone, label) {
-  const t = tone || "red";
-  return `<span class="status-light" title="${escapeHtml(label || t)}"><span class="dot ${escapeHtml(t)}" aria-hidden="true"></span><span class="lbl">${escapeHtml(label || "")}</span></span>`;
+  const tn = tone || "red";
+  return `<span class="status-light" title="${escapeHtml(label || tn)}"><span class="dot ${escapeHtml(tn)}" aria-hidden="true"></span><span class="lbl">${escapeHtml(label || "")}</span></span>`;
 }
 
 function showVCView(vc) {
@@ -365,63 +367,63 @@ function showVCView(vc) {
   $("#detailBody").innerHTML = `
     <div class="detail-head">
       <div class="detail-main">
-        <p class="caps">vCenter</p>
+        <p class="caps">${escapeHtml(t("vc.caps"))}</p>
         <h2 class="detail-title">${escapeHtml(vc.name)}</h2>
         <p class="detail-url">${escapeHtml(vc.url)}</p>
         <dl class="field-grid">
-          <div class="field-row"><dt>Datacenter</dt><dd>${escapeHtml(vc.datacenter || "—")}</dd></div>
-          <div class="field-row"><dt>Datastore</dt><dd>${escapeHtml(dsLabel(vc.datastore))}</dd></div>
-          <div class="field-row"><dt>Username</dt><dd>${escapeHtml(vc.username || "—")}${vc.insecure ? ' <span class="pill-tag">insecure</span>' : ""}</dd></div>
-          <div class="field-row"><dt>VM folder</dt><dd>${vc.folder ? `${escapeHtml(vc.folder)} <span class="pill-tag">recursive</span>` : "<em>not set</em>"}</dd></div>
-          <div class="field-row"><dt>ISO folder</dt><dd>${escapeHtml(vc.isoFolder || "rf2vc/isos")}</dd></div>
-          ${notes && !notesDup ? `<div class="field-row"><dt>Notes</dt><dd>${escapeHtml(notes)}</dd></div>` : ""}
+          <div class="field-row"><dt>${escapeHtml(t("f.datacenter"))}</dt><dd>${escapeHtml(vc.datacenter || "—")}</dd></div>
+          <div class="field-row"><dt>${escapeHtml(t("f.datastore"))}</dt><dd>${escapeHtml(dsLabel(vc.datastore))}</dd></div>
+          <div class="field-row"><dt>${escapeHtml(t("f.username"))}</dt><dd>${escapeHtml(vc.username || "—")}${vc.insecure ? ` <span class="pill-tag">${escapeHtml(t("tag.insecure"))}</span>` : ""}</dd></div>
+          <div class="field-row"><dt>${escapeHtml(t("f.vmFolder"))}</dt><dd>${vc.folder ? `${escapeHtml(vc.folder)} <span class="pill-tag">${escapeHtml(t("tag.recursive"))}</span>` : `<em>${escapeHtml(t("notSet"))}</em>`}</dd></div>
+          <div class="field-row"><dt>${escapeHtml(t("f.isoFolder"))}</dt><dd>${escapeHtml(vc.isoFolder || "rf2vc/isos")}</dd></div>
+          ${notes && !notesDup ? `<div class="field-row"><dt>${escapeHtml(t("f.notes"))}</dt><dd>${escapeHtml(notes)}</dd></div>` : ""}
         </dl>
         <div class="health-block">
           <div class="health-row" id="healthRow">
-            ${lightHTML("yellow", "Connection…")}
-            ${lightHTML("yellow", "ISO cache…")}
+            ${lightHTML("yellow", t("light.connectionWait"))}
+            ${lightHTML("yellow", t("light.isoWait"))}
           </div>
           <ul class="health-checks" id="healthChecks">
-            <li class="health-check skip"><span class="mark">…</span><span class="name">Probing…</span></li>
+            <li class="health-check skip"><span class="mark">…</span><span class="name">${escapeHtml(t("health.probing"))}</span></li>
           </ul>
           <p class="msg" id="vcTestMsg"></p>
         </div>
       </div>
       <div class="detail-actions">
-        <label class="dry-toggle sm" title="Fake outbound mutations for this vCenter only">
+        <label class="dry-toggle sm" title="${escapeHtml(t("dry.vcTitle"))}">
           <input type="checkbox" data-vc-dry="${vc.id}" ${vc.dryRun || globalDryRun ? "checked" : ""} ${globalDryRun ? "disabled" : ""} />
-          <span>Dry-run</span>
+          <span>${escapeHtml(t("dry.label"))}</span>
         </label>
-        <button type="button" class="pill ghost sm" data-test-vc="${vc.id}">Test</button>
-        <button type="button" class="pill ghost sm" data-refresh-health="${vc.id}">Refresh</button>
-        <button type="button" class="pill ghost sm" data-edit="${vc.id}">Edit</button>
-        <button type="button" class="pill danger sm" data-delete="${vc.id}">Delete</button>
+        <button type="button" class="pill ghost sm" data-test-vc="${vc.id}">${escapeHtml(t("btn.test"))}</button>
+        <button type="button" class="pill ghost sm" data-refresh-health="${vc.id}">${escapeHtml(t("btn.refresh"))}</button>
+        <button type="button" class="pill ghost sm" data-edit="${vc.id}">${escapeHtml(t("btn.edit"))}</button>
+        <button type="button" class="pill danger sm" data-delete="${vc.id}">${escapeHtml(t("btn.delete"))}</button>
       </div>
     </div>
 
     <div class="tabs" role="tablist">
-      <button type="button" class="tab ${tab === "uuids" ? "active" : ""}" data-tab="uuids" role="tab">UUIDs <span id="uuidTabCount">(${mapped.length})</span></button>
-      <button type="button" class="tab ${tab === "iso" ? "active" : ""}" data-tab="iso" role="tab">ISO cache</button>
+      <button type="button" class="tab ${tab === "uuids" ? "active" : ""}" data-tab="uuids" role="tab">${escapeHtml(t("tab.uuids"))} <span id="uuidTabCount">(${mapped.length})</span></button>
+      <button type="button" class="tab ${tab === "iso" ? "active" : ""}" data-tab="iso" role="tab">${escapeHtml(t("tab.iso"))}</button>
     </div>
 
     <div class="tab-panel ${tab === "uuids" ? "" : "hidden"}" id="tabUuids">
-      <p class="detail-meta folder-summary" id="folderVmSummary">Loading folder VMs…</p>
+      <p class="detail-meta folder-summary" id="folderVmSummary">${escapeHtml(t("folder.loading"))}</p>
       <div class="uuid-list" id="uuidList"></div>
       <form class="bind-form" id="bindForm">
-        <label>BIOS UUID <input name="uuid" required placeholder="4235a1b2-… (add even if not listed)" /></label>
-        <label>Name <input name="name" placeholder="MO-OCLAB-CP01" /></label>
-        <label>Notes <input name="notes" /></label>
-        <button type="submit" class="pill primary">Add UUID</button>
+        <label>${escapeHtml(t("bind.uuid"))} <input name="uuid" required placeholder="${escapeHtml(t("bind.uuidPh"))}" /></label>
+        <label>${escapeHtml(t("bind.name"))} <input name="name" placeholder="MO-OCLAB-CP01" /></label>
+        <label>${escapeHtml(t("bind.notes"))} <input name="notes" /></label>
+        <button type="submit" class="pill primary">${escapeHtml(t("bind.add"))}</button>
       </form>
       <p class="msg" id="bindMsg"></p>
     </div>
 
     <div class="tab-panel ${tab === "iso" ? "" : "hidden"}" id="tabIso">
       <div class="section-head">
-        <h3>Staged ISOs</h3>
-        <button type="button" class="pill ghost sm" data-refresh-iso="${vc.id}">Refresh</button>
+        <h3>${escapeHtml(t("iso.title"))}</h3>
+        <button type="button" class="pill ghost sm" data-refresh-iso="${vc.id}">${escapeHtml(t("btn.refresh"))}</button>
       </div>
-      <p class="detail-meta" id="isoSummary">Loading…</p>
+      <p class="detail-meta" id="isoSummary">${escapeHtml(t("iso.loading"))}</p>
       <div class="iso-list" id="isoList"></div>
       <p class="msg" id="isoMsg"></p>
     </div>
@@ -444,7 +446,7 @@ function showVCView(vc) {
           notes: f.notes.value.trim(),
         }),
       });
-      setMsg($("#bindMsg"), "Bound", true);
+      setMsg($("#bindMsg"), t("bind.bound"), true);
       await reload(vc.id);
     } catch (err) {
       setMsg($("#bindMsg"), err.message, false);
@@ -458,7 +460,7 @@ function mergeUUIDRows(mapped, discovered) {
   for (const vm of discovered || []) {
     byUUID.set(vm.uuid, {
       uuid: vm.uuid,
-      name: vm.name || "System",
+      name: vm.name || t("row.system"),
       notes: "",
       path: vm.path || "",
       powerState: vm.powerState || "",
@@ -476,7 +478,7 @@ function mergeUUIDRows(mapped, discovered) {
     } else {
       byUUID.set(m.uuid, {
         uuid: m.uuid,
-        name: m.name || "System",
+        name: m.name || t("row.system"),
         notes: m.notes || "",
         path: "",
         powerState: "",
@@ -495,30 +497,30 @@ function renderUUIDRows(vc, rows) {
   const list = $("#uuidList");
   if (!list) return;
   if (!rows.length) {
-    list.innerHTML = `<div class="vc-empty">No VMs in folder and no UUIDs bound yet.${vc.folder ? "" : "<br/>Set Folder (GOVC_FOLDER) or Add UUID below."}</div>`;
+    list.innerHTML = `<div class="vc-empty">${escapeHtml(t("uuid.empty"))}${vc.folder ? "" : `<br/>${escapeHtml(t("uuid.emptyHint"))}`}</div>`;
     return;
   }
   list.innerHTML = rows.map(m => {
     const tags = [];
-    if (m.inFolder) tags.push(`<span class="pill-tag">folder</span>`);
-    if (m.bound) tags.push(`<span class="pill-tag bound">bound</span>`);
-    else tags.push(`<span class="pill-tag unbound">not bound</span>`);
+    if (m.inFolder) tags.push(`<span class="pill-tag">${escapeHtml(t("tag.folder"))}</span>`);
+    if (m.bound) tags.push(`<span class="pill-tag bound">${escapeHtml(t("tag.bound"))}</span>`);
+    else tags.push(`<span class="pill-tag unbound">${escapeHtml(t("tag.unbound"))}</span>`);
     const shortUuid = m.uuid.length > 13 ? `${m.uuid.slice(0, 8)}…` : m.uuid;
     const actions = m.bound
       ? `
-        <button type="button" class="pill danger sm" data-unmap="${escapeHtml(m.uuid)}" title="Remove UUID mapping (does not delete the VM)">Unbind</button>
-        <button type="button" class="pill ghost sm" data-uuid-status="${escapeHtml(m.uuid)}">Status</button>
-        <button type="button" class="pill ghost sm" data-uuid-on="${escapeHtml(m.uuid)}" disabled>Power on</button>
-        <button type="button" class="pill ghost sm" data-uuid-off="${escapeHtml(m.uuid)}" disabled>Power off</button>
-        <button type="button" class="pill ghost sm" data-uuid-iso="${escapeHtml(m.uuid)}">ISO map</button>`
+        <button type="button" class="pill danger sm" data-unmap="${escapeHtml(m.uuid)}" title="${escapeHtml(t("btn.unbindTitle"))}">${escapeHtml(t("btn.unbind"))}</button>
+        <button type="button" class="pill ghost sm" data-uuid-status="${escapeHtml(m.uuid)}">${escapeHtml(t("btn.status"))}</button>
+        <button type="button" class="pill ghost sm" data-uuid-on="${escapeHtml(m.uuid)}" disabled>${escapeHtml(t("btn.powerOn"))}</button>
+        <button type="button" class="pill ghost sm" data-uuid-off="${escapeHtml(m.uuid)}" disabled>${escapeHtml(t("btn.powerOff"))}</button>
+        <button type="button" class="pill ghost sm" data-uuid-iso="${escapeHtml(m.uuid)}">${escapeHtml(t("btn.isoMap"))}</button>`
       : `
-        <button type="button" class="pill primary sm" data-bind-folder="${escapeHtml(m.uuid)}" data-bind-name="${escapeHtml(m.name)}" title="Map this BIOS UUID so ACM/BMH Redfish calls control this VM">Bind</button>`;
+        <button type="button" class="pill primary sm" data-bind-folder="${escapeHtml(m.uuid)}" data-bind-name="${escapeHtml(m.name)}" title="${escapeHtml(t("btn.bindTitle"))}">${escapeHtml(t("btn.bind"))}</button>`;
     return `
     <div class="uuid-row" data-uuid-row="${escapeHtml(m.uuid)}">
       <button type="button" class="uuid-summary" data-toggle-uuid="${escapeHtml(m.uuid)}" aria-expanded="false">
         <span class="chev" aria-hidden="true"></span>
         <span class="status-light" data-light="${escapeHtml(m.uuid)}"><span class="dot ${escapeHtml(m.light || "yellow")}"></span></span>
-        <span class="title">${escapeHtml(m.name || "System")}</span>
+        <span class="title">${escapeHtml(m.name || t("row.system"))}</span>
         <span class="uuid-tags">${tags.join("")}</span>
         <span class="uuid-short" title="${escapeHtml(m.uuid)}">${escapeHtml(shortUuid)}</span>
       </button>
@@ -526,11 +528,11 @@ function renderUUIDRows(vc, rows) {
       <p class="msg uuid-row-msg" data-row-msg="${escapeHtml(m.uuid)}"></p>
       <div class="uuid-details hidden" data-uuid-details="${escapeHtml(m.uuid)}">
         <div class="detail-grid">
-          <span class="k">BIOS UUID</span><code class="v">${escapeHtml(m.uuid)}</code>
-          <span class="k">Redfish</span><code class="v">/redfish/v1/Systems/${escapeHtml(m.uuid)}</code>
-          <span class="k">Path</span><span class="v" data-vm-path="${escapeHtml(m.uuid)}">${m.path ? escapeHtml(m.path) : "—"}</span>
-          ${m.notes ? `<span class="k">Notes</span><span class="v">${escapeHtml(m.notes)}</span>` : ""}
-          <span class="k">CDROM</span><span class="v" data-cdrom="${escapeHtml(m.uuid)}">—</span>
+          <span class="k">${escapeHtml(t("dk.uuid"))}</span><code class="v">${escapeHtml(m.uuid)}</code>
+          <span class="k">${escapeHtml(t("dk.redfish"))}</span><code class="v">/redfish/v1/Systems/${escapeHtml(m.uuid)}</code>
+          <span class="k">${escapeHtml(t("dk.path"))}</span><span class="v" data-vm-path="${escapeHtml(m.uuid)}">${m.path ? escapeHtml(m.path) : "—"}</span>
+          ${m.notes ? `<span class="k">${escapeHtml(t("dk.notes"))}</span><span class="v">${escapeHtml(m.notes)}</span>` : ""}
+          <span class="k">${escapeHtml(t("dk.cdrom"))}</span><span class="v" data-cdrom="${escapeHtml(m.uuid)}">—</span>
         </div>
       </div>
     </div>`;
@@ -542,25 +544,27 @@ async function loadUUIDTab(vc) {
   const mapped = mappingsFor(vc.id);
   let discovered = [];
   let folderMsg = "";
+  let failed = false;
   if (!vc.folder) {
-    folderMsg = "Folder not set — showing bound UUIDs only. Set GOVC_FOLDER to discover VMs under that path (recursive).";
+    folderMsg = t("folder.notSet");
   } else {
-    if (summary) summary.textContent = `Scanning ${vc.folder} (recursive)… — watch Activity → Runtime or oc logs -f`;
+    if (summary) summary.textContent = t("folder.scanning", { folder: vc.folder });
     try {
       const res = await api(`/api/v1/vcenters/${vc.id}/vms`);
       discovered = res.vms || [];
+      failed = !!res.error;
       folderMsg = res.error
-        ? `Folder scan failed: ${res.error}`
-        : `Folder · ${discovered.length} VM(s) under ${vc.folder} (includes subfolders) · ${mapped.length} bound`;
+        ? t("folder.failed", { err: res.error })
+        : t("folder.ok", { n: discovered.length, folder: vc.folder, bound: mapped.length });
       if (!res.error && discovered.length === 0) {
-        folderMsg += " — see Activity / Runtime for candidate paths tried";
+        folderMsg += t("folder.noneHint");
       }
     } catch (err) {
-      folderMsg = `Folder scan failed: ${err.message}`;
+      failed = true;
+      folderMsg = t("folder.failed", { err: err.message });
     }
   }
   if (summary) {
-    const failed = folderMsg.startsWith("Folder scan failed");
     summary.textContent = folderMsg;
     summary.classList.toggle("error-box", failed);
     summary.classList.toggle("warn-box", !failed && (!vc.folder || discovered.length === 0));
@@ -586,7 +590,7 @@ function applyUUIDStatus(uuid, st) {
   const cdEl = document.querySelector(`[data-cdrom="${CSS.escape(uuid)}"]`);
   if (cdEl) {
     if (st.cdromIso) cdEl.textContent = st.cdromIso;
-    else if (st.found) cdEl.textContent = "(none / empty)";
+    else if (st.found) cdEl.textContent = t("cdrom.none");
     else if (st.error) cdEl.textContent = "—";
   }
   const onBtn = document.querySelector(`[data-uuid-on="${CSS.escape(uuid)}"]`);
@@ -633,8 +637,8 @@ async function loadHealth(vcId) {
   try {
     const h = await api(`/api/v1/vcenters/${vcId}/health`);
     row.innerHTML =
-      lightHTML(h.connection, "Connection") +
-      lightHTML(h.isoCache, "ISO cache");
+      lightHTML(h.connection, t("light.connection")) +
+      lightHTML(h.isoCache, t("light.iso"));
     if (checks) {
       // Yellow also covers failed logins (e.g. expired session); only "connected…" means login worked.
       const connected = h.connection === "green" || /^connected/i.test(h.connectionDetail || "");
@@ -642,16 +646,16 @@ async function loadHealth(vcId) {
       const folderSet = !!(h.folderPath || h.folderOk);
       const folderOk = !!h.folderOk && connected;
       checks.innerHTML =
-        healthCheckHTML(connected, false, "Login / datacenter", h.connectionDetail || h.connection) +
-        healthCheckHTML(folderOk, !folderSet && !h.folderPath, "VM folder",
-          h.folderPath ? (folderOk ? h.folderPath : (h.connectionDetail || "folder issue")) : "not set") +
-        healthCheckHTML(isoOk, false, "ISO / datastore", h.isoCacheDetail || h.isoCache);
+        healthCheckHTML(connected, false, t("health.login"), tServer(h.connectionDetail) || h.connection) +
+        healthCheckHTML(folderOk, !folderSet && !h.folderPath, t("health.folder"),
+          h.folderPath ? (folderOk ? h.folderPath : (tServer(h.connectionDetail) || t("health.folderIssue"))) : t("notSet")) +
+        healthCheckHTML(isoOk, false, t("health.iso"), tServer(h.isoCacheDetail) || h.isoCache);
       checks.classList.toggle("has-error", !!checks.querySelector(".health-check.err"));
     }
   } catch (err) {
-    row.innerHTML = lightHTML("red", "Connection") + lightHTML("red", "ISO cache");
+    row.innerHTML = lightHTML("red", t("light.connection")) + lightHTML("red", t("light.iso"));
     if (checks) {
-      checks.innerHTML = healthCheckHTML(false, false, "Health", err.message);
+      checks.innerHTML = healthCheckHTML(false, false, t("health.name"), err.message);
       checks.classList.add("has-error");
     }
   }
@@ -674,25 +678,26 @@ async function loadISOStatus(vcId) {
   const list = $("#isoList");
   const msg = $("#isoMsg");
   if (!summary || !list) return;
-  summary.textContent = "Loading…";
+  summary.textContent = t("iso.loading");
   list.innerHTML = "";
   setMsg(msg, "", null);
   try {
     const st = await api(`/api/v1/vcenters/${vcId}/iso-status`);
-    const reach = st.reachable ? "reachable" : "unreachable";
-    summary.textContent =
-      `${st.datastore || "?"} · ${st.isoFolder || "?"} · ${reach}` +
-      ` · ${st.datastoreCount || 0} on datastore · ${st.localCacheCount || 0} local`;
+    summary.textContent = t("iso.summary", {
+      ds: st.datastore || "?", folder: st.isoFolder || "?",
+      reach: t(st.reachable ? "iso.reachable" : "iso.unreachable"),
+      onDs: st.datastoreCount || 0, local: st.localCacheCount || 0,
+    });
     if (st.error) setMsg(msg, st.error, false);
     const files = st.files || [];
     if (!files.length) {
-      list.innerHTML = `<div class="vc-empty">No hashed ISOs staged yet. InsertMedia will download once, then reuse the datastore file.</div>`;
+      list.innerHTML = `<div class="vc-empty">${escapeHtml(t("iso.none"))}</div>`;
       return;
     }
     list.innerHTML = files.map(f => {
       const flags = [
-        f.onDatastore ? `DS ${formatBytes(f.datastoreSize)}` : "not on DS",
-        f.localCached ? `local ${formatBytes(f.localSize)}` : null,
+        f.onDatastore ? t("iso.onDs", { size: formatBytes(f.datastoreSize) }) : t("iso.notOnDs"),
+        f.localCached ? t("iso.local", { size: formatBytes(f.localSize) }) : null,
       ].filter(Boolean).join(" · ");
       return `
         <div class="iso-row">
@@ -702,7 +707,7 @@ async function loadISOStatus(vcId) {
         </div>`;
     }).join("");
   } catch (err) {
-    summary.textContent = "ISO status unavailable";
+    summary.textContent = t("iso.unavailable");
     setMsg(msg, err.message, false);
   }
 }
@@ -720,13 +725,13 @@ function wireVCForm(form) {
           body: JSON.stringify(body),
         });
       } else {
-        if (!body.password) throw new Error("password required for new vCenter");
+        if (!body.password) throw new Error(t("msg.pwNew"));
         out = await api("/api/v1/vcenters", {
           method: "POST",
           body: JSON.stringify(body),
         });
       }
-      setMsg(msg, "Saved", true);
+      setMsg(msg, t("msg.saved"), true);
       await reload(out.id);
     } catch (err) {
       setMsg(msg, err.message, false);
@@ -748,7 +753,7 @@ function wireVCForm(form) {
   form.querySelector('[data-action="test"]').addEventListener("click", async () => {
     const msg = form.querySelector('[data-msg="vc"]');
     const body = formBody(form);
-    setMsg(msg, "Testing…", null);
+    setMsg(msg, t("msg.testing"), null);
     try {
       let res;
       if (form.id.value) {
@@ -757,14 +762,14 @@ function wireVCForm(form) {
           body: JSON.stringify(body),
         });
       } else {
-        if (!body.password) throw new Error("password required to test a new vCenter");
+        if (!body.password) throw new Error(t("msg.pwTest"));
         res = await api("/api/v1/vcenters/test", {
           method: "POST",
           body: JSON.stringify(body),
         });
       }
       showTestModal(res);
-      setMsg(msg, res.ok ? "Connection OK — see checklist" : (res.error || "failed — see checklist"), !!res.ok);
+      setMsg(msg, res.ok ? t("msg.testOk") : (tServer(res.error) || t("msg.testFail")), !!res.ok);
     } catch (err) {
       showTestModal({ ok: false, error: err.message, checks: [] });
       setMsg(msg, err.message, false);
@@ -897,19 +902,19 @@ $("#detailPane").addEventListener("click", async (e) => {
     if (vc) showEditForm(vc);
   }
   if (del) {
-    if (!confirm("Delete this vCenter and all UUID mappings under it?")) return;
+    if (!confirm(t("confirm.delete"))) return;
     await api(`/api/v1/vcenters/${del}`, { method: "DELETE" });
     ui = null;
     await reload();
   }
   if (unmap) {
-    if (!confirm("Unbind this UUID? The VM stays in vSphere; ACM/BMH will no longer reach it via rf2vc.")) return;
+    if (!confirm(t("confirm.unbind"))) return;
     await api(`/api/v1/mappings/${encodeURIComponent(unmap)}`, { method: "DELETE" });
     await reload(ui?.id);
   }
   if (bindFolder && ui?.id) {
     const msg = rowMsg(bindFolder);
-    setMsg(msg, "Binding…", null);
+    setMsg(msg, t("bind.binding"), null);
     try {
       await api("/api/v1/mappings", {
         method: "POST",
@@ -919,11 +924,11 @@ $("#detailPane").addEventListener("click", async (e) => {
           name: bindName || "",
         }),
       });
-      setMsg(msg, "Bound — UUID mapped for Redfish", true);
+      setMsg(msg, t("bind.boundRedfish"), true);
       await reload(ui.id);
       // After reload, leave a brief success note on the bound row if still present.
       const after = rowMsg(bindFolder);
-      if (after) setMsg(after, "Bound", true);
+      if (after) setMsg(after, t("bind.bound"), true);
     } catch (err) {
       expandUUIDRow(bindFolder);
       setMsg(msg, err.message, false);
@@ -937,11 +942,11 @@ $("#detailPane").addEventListener("click", async (e) => {
   }
   if (testVc) {
     const msg = $("#vcTestMsg");
-    setMsg(msg, "Testing…", null);
+    setMsg(msg, t("msg.testing"), null);
     try {
       const res = await api(`/api/v1/vcenters/${testVc}/test`, { method: "POST", body: "{}" });
       showTestModal(res);
-      setMsg(msg, res.ok ? "Connection OK — see checklist" : (res.error || "failed — see checklist"), !!res.ok);
+      setMsg(msg, res.ok ? t("msg.testOk") : (tServer(res.error) || t("msg.testFail")), !!res.ok);
       await loadHealth(testVc);
       const vc = vcenters.find(v => v.id === testVc);
       if (vc) await loadUUIDTab(vc);
@@ -953,16 +958,17 @@ $("#detailPane").addEventListener("click", async (e) => {
   if (uuidStatus) {
     expandUUIDRow(uuidStatus);
     const msg = rowMsg(uuidStatus);
-    setMsg(msg, "Probing vSphere…", null);
+    setMsg(msg, t("msg.probing"), null);
     const st = await loadUUIDStatus(uuidStatus);
     if (!st) {
-      setMsg(msg, "status unavailable", false);
+      setMsg(msg, t("msg.statusUnavailable"), false);
     } else if (st.found && st.powerState) {
-      setMsg(msg, `${st.powerState} · ${st.name || "VM"}${st.error ? " · " + st.error : ""}`, !st.error || st.light !== "red");
+      const ps = I18N.en["power." + st.powerState] ? t("power." + st.powerState) : st.powerState;
+      setMsg(msg, `${ps} · ${st.name || t("msg.vm")}${st.error ? " · " + st.error : ""}`, !st.error || st.light !== "red");
     } else if (st.found) {
-      setMsg(msg, st.error || "found (limited props)", st.error ? false : true);
+      setMsg(msg, st.error || t("msg.foundLimited"), st.error ? false : true);
     } else {
-      setMsg(msg, st.error || "not found", false);
+      setMsg(msg, st.error || t("msg.notFound"), false);
     }
   }
   if (uuidOn) {
@@ -972,20 +978,20 @@ $("#detailPane").addEventListener("click", async (e) => {
         body: JSON.stringify({ resetType: "On" }),
       });
       if (res.status) applyUUIDStatus(uuidOn, res.status);
-      setMsg(rowMsg(uuidOn), res.dryRun ? "dry-run: power on not sent" : "power on requested", true);
+      setMsg(rowMsg(uuidOn), t(res.dryRun ? "msg.dryOn" : "msg.onRequested"), true);
     } catch (err) {
       setMsg(rowMsg(uuidOn), err.message, false);
     }
   }
   if (uuidOff) {
-    if (!confirm("Power off this VM? Guests will lose power immediately (ForceOff).")) return;
+    if (!confirm(t("confirm.powerOff"))) return;
     try {
       const res = await api(`/api/v1/mappings/${encodeURIComponent(uuidOff)}/power`, {
         method: "POST",
         body: JSON.stringify({ resetType: "ForceOff" }),
       });
       if (res.status) applyUUIDStatus(uuidOff, res.status);
-      setMsg(rowMsg(uuidOff), res.dryRun ? "dry-run: power off not sent" : "power off requested", true);
+      setMsg(rowMsg(uuidOff), t(res.dryRun ? "msg.dryOff" : "msg.offRequested"), true);
     } catch (err) {
       setMsg(rowMsg(uuidOff), err.message, false);
     }
@@ -994,13 +1000,34 @@ $("#detailPane").addEventListener("click", async (e) => {
     expandUUIDRow(uuidIso);
     const st = await loadUUIDStatus(uuidIso);
     const msg = rowMsg(uuidIso);
-    if (st?.cdromIso) setMsg(msg, `CDROM · ${st.cdromIso}`, true);
-    else if (st?.found) setMsg(msg, st.error || "CDROM empty / no ISO backing", st.error ? false : true);
-    else setMsg(msg, st?.error || "unavailable", false);
+    if (st?.cdromIso) setMsg(msg, t("msg.cdrom", { iso: st.cdromIso }), true);
+    else if (st?.found) setMsg(msg, st.error || t("msg.cdromEmpty"), st.error ? false : true);
+    else setMsg(msg, st?.error || t("msg.unavailable"), false);
   }
 });
 
+function rerenderForLang() {
+  syncActivityOrderButton();
+  refreshStatus().catch(() => {});
+  refreshWhoami();
+  renderVCList();
+  const vc = ui?.id && vcenters.find(v => v.id === ui.id);
+  if (ui?.mode === "view" && vc) showVCView(vc);
+  else if (!ui) emptyDetail();
+  if (pageView === "activity") refreshActivity(true);
+}
+
+document.querySelectorAll("[data-lang]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    if (btn.dataset.lang === lang) return;
+    setLang(btn.dataset.lang);
+    rerenderForLang();
+  });
+});
+setLang(lang);
+syncActivityOrderButton();
+
 reload().catch(err => {
-  $("#statusLine").textContent = "API error: " + err.message;
+  $("#statusLine").textContent = t("status.apiError", { err: err.message });
 });
 refreshWhoami();

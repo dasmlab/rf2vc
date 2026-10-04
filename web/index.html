@@ -15,22 +15,26 @@
       <div class="hero-noise" aria-hidden="true"></div>
       <div class="hero-orb a" aria-hidden="true"></div>
       <div class="hero-orb b" aria-hidden="true"></div>
+      <div class="lang-toggle" role="group" data-i18n-aria="lang.title">
+        <button type="button" data-lang="en" lang="en" title="English">EN</button>
+        <button type="button" data-lang="fr-CA" lang="fr-CA" title="Français (Québec)">FR-CA</button>
+      </div>
       <div class="hero-content">
-        <p class="caps">DASMLAB · tools</p>
+        <p class="caps" data-i18n="hero.caps">DASMLAB · tools</p>
         <h1 class="brand">rf2vc</h1>
-        <p class="headline">Redfish to vSphere.</p>
-        <p class="lede">Configure vCenters, bind BIOS UUIDs, and route BMH <code>/redfish/v1/Systems/&lt;uuid&gt;</code>.</p>
+        <p class="headline" data-i18n="hero.headline">Redfish to vSphere.</p>
+        <p class="lede" data-i18n-html="hero.lede">Configure vCenters, bind BIOS UUIDs, and route BMH <code>/redfish/v1/Systems/&lt;uuid&gt;</code>.</p>
         <div class="cta-row">
           <nav class="view-nav" aria-label="Primary">
-            <button type="button" class="pill ghost sm active" data-view="inventory" id="navInventory">Inventory</button>
-            <button type="button" class="pill ghost sm" data-view="activity" id="navActivity">Activity</button>
+            <button type="button" class="pill ghost sm active" data-view="inventory" id="navInventory" data-i18n="nav.inventory">Inventory</button>
+            <button type="button" class="pill ghost sm" data-view="activity" id="navActivity" data-i18n="nav.activity">Activity</button>
           </nav>
-          <button type="button" class="pill primary" id="btnAddVC">Add vCenter</button>
-          <label class="dry-toggle" title="Fake outbound vSphere mutations (power/ISO); connection and inventory stay real">
+          <button type="button" class="pill primary" id="btnAddVC" data-i18n="btn.addVC">Add vCenter</button>
+          <label class="dry-toggle" data-i18n-title="dry.title" title="Fake outbound vSphere mutations (power/ISO); connection and inventory stay real">
             <input type="checkbox" id="globalDryRun" />
-            <span>Dry-run</span>
+            <span data-i18n="dry.label">Dry-run</span>
           </label>
-          <span class="status-chip" id="statusLine">loading…</span>
+          <span class="status-chip" id="statusLine" data-i18n="status.loading">loading…</span>
           <span class="status-chip hidden" id="whoami"></span>
         </div>
       </div>
@@ -40,10 +44,10 @@
       <aside class="shell vc-pane">
         <div class="pane-head">
           <div>
-            <p class="caps">Inventory</p>
-            <h2 class="pane-title">vCenters</h2>
+            <p class="caps" data-i18n="inv.caps">Inventory</p>
+            <h2 class="pane-title" data-i18n="inv.title">vCenters</h2>
           </div>
-          <button type="button" class="pill ghost sm" id="btnAddVC2">Add</button>
+          <button type="button" class="pill ghost sm" id="btnAddVC2" data-i18n="btn.add">Add</button>
         </div>
         <div id="vcList" class="vc-list"></div>
       </aside>
@@ -52,8 +56,8 @@
         <div id="detailBody">
           <div class="empty-state">
             <div class="ph-icon" aria-hidden="true"></div>
-            <p class="empty-title">Select a vCenter</p>
-            <p>Pick one on the left to see its UUIDs, edit connection settings, or bind a new system.</p>
+            <p class="empty-title" data-i18n="empty.title">Select a vCenter</p>
+            <p data-i18n="empty.body">Pick one on the left to see its UUIDs, edit connection settings, or bind a new system.</p>
           </div>
         </div>
       </main>
@@ -62,35 +66,35 @@
     <section class="activity-workspace rise hidden" id="viewActivity" style="--d:80ms" aria-label="Activity logs">
       <div class="activity-toolbar shell">
         <div>
-          <p class="caps">Observability</p>
-          <h2 class="pane-title">Activity</h2>
-          <p class="detail-meta">Inbound ACM/BMH · runtime housekeeping · outbound vSphere (or dry-run)</p>
+          <p class="caps" data-i18n="act.caps">Observability</p>
+          <h2 class="pane-title" data-i18n="act.title">Activity</h2>
+          <p class="detail-meta" data-i18n="act.meta">Inbound ACM/BMH · runtime housekeeping · outbound vSphere (or dry-run)</p>
         </div>
         <div class="activity-toolbar-actions">
           <label class="dry-toggle">
             <input type="checkbox" id="activityDryRun" />
-            <span>Dry-run mode</span>
+            <span data-i18n="act.dry">Dry-run mode</span>
           </label>
-          <button type="button" class="pill ghost sm" id="btnActivityOrder" aria-pressed="true" title="Toggle newest-first / oldest-first">Newest first ↓</button>
-          <button type="button" class="pill ghost sm" id="btnClearActivityHint" title="Logs are in-memory; restart clears">Live · polls 2s</button>
+          <button type="button" class="pill ghost sm" id="btnActivityOrder" aria-pressed="true" data-i18n-title="act.orderTitle" title="Toggle newest-first / oldest-first">Newest first ↓</button>
+          <button type="button" class="pill ghost sm" id="btnClearActivityHint" data-i18n="act.live" data-i18n-title="act.liveTitle" title="Logs are in-memory; restart clears">Live · polls 2s</button>
         </div>
       </div>
-      <div class="activity-tabs shell" role="tablist" aria-label="Activity channels">
+      <div class="activity-tabs shell" role="tablist" data-i18n-aria="act.tabsLabel" aria-label="Activity channels">
         <button type="button" class="activity-tab active" data-activity-tab="inbound" role="tab" aria-selected="true">
-          Inbound <span class="tab-hint">ACM / BMH</span>
+          <span data-i18n="act.inbound">Inbound</span> <span class="tab-hint" data-i18n="act.inboundHint">ACM / BMH</span>
         </button>
         <button type="button" class="activity-tab" data-activity-tab="runtime" role="tab" aria-selected="false">
-          Runtime <span class="tab-hint">scans · health</span>
+          <span data-i18n="act.runtime">Runtime</span> <span class="tab-hint" data-i18n="act.runtimeHint">scans · health</span>
         </button>
         <button type="button" class="activity-tab" data-activity-tab="outbound" role="tab" aria-selected="false">
-          Outbound <span class="tab-hint">vSphere</span>
+          <span data-i18n="act.outbound">Outbound</span> <span class="tab-hint" data-i18n="act.outboundHint">vSphere</span>
         </button>
       </div>
       <article class="shell activity-pane activity-pane-full" data-channel="inbound" id="paneInbound">
         <header class="activity-pane-head">
           <div>
-            <h3>Inbound</h3>
-            <p>ACM / BMH → Redfish requests</p>
+            <h3 data-i18n="act.inbound">Inbound</h3>
+            <p data-i18n="act.inboundDesc">ACM / BMH → Redfish requests</p>
           </div>
         </header>
         <div class="activity-log" id="logInbound"></div>
@@ -98,8 +102,8 @@
       <article class="shell activity-pane activity-pane-full hidden" data-channel="runtime" id="paneRuntime">
         <header class="activity-pane-head">
           <div>
-            <h3>Runtime</h3>
-            <p>Housekeeping · folder scans · health</p>
+            <h3 data-i18n="act.runtime">Runtime</h3>
+            <p data-i18n="act.runtimeDesc">Housekeeping · folder scans · health</p>
           </div>
         </header>
         <div class="activity-log" id="logRuntime"></div>
@@ -107,8 +111,8 @@
       <article class="shell activity-pane activity-pane-full hidden" data-channel="outbound" id="paneOutbound">
         <header class="activity-pane-head">
           <div>
-            <h3>Outbound</h3>
-            <p>rf2vc → vSphere (or dry-run)</p>
+            <h3 data-i18n="act.outbound">Outbound</h3>
+            <p data-i18n="act.outboundDesc">rf2vc → vSphere (or dry-run)</p>
           </div>
         </header>
         <div class="activity-log" id="logOutbound"></div>
@@ -119,22 +123,22 @@
   <template id="tplVCForm">
     <form class="vc-form" id="vcForm">
       <input type="hidden" name="id" />
-      <label>Name <input name="name" required placeholder="lab-vc" /></label>
-      <label>URL <input name="url" required placeholder="https://vcenter.example.local" /></label>
-      <label>Username <input name="username" required placeholder="administrator@vsphere.local" /></label>
-      <label>Password <input name="password" type="password" placeholder="required for new / leave blank to keep" autocomplete="new-password" /></label>
+      <label><span data-i18n="form.name">Name</span> <input name="name" required placeholder="lab-vc" /></label>
+      <label><span data-i18n="form.url">URL</span> <input name="url" required placeholder="https://vcenter.example.local" /></label>
+      <label><span data-i18n="form.username">Username</span> <input name="username" required placeholder="administrator@vsphere.local" /></label>
+      <label><span data-i18n="form.password">Password</span> <input name="password" type="password" data-i18n-placeholder="form.passwordPh" placeholder="required for new / leave blank to keep" autocomplete="new-password" /></label>
       <div class="row2">
-        <label>Datacenter <input name="datacenter" required placeholder="Montreal" /></label>
-        <label>Datastore <input name="datastore" placeholder="real DS name (not NONE) — needed for ISO" /></label>
+        <label><span data-i18n="form.datacenter">Datacenter</span> <input name="datacenter" required placeholder="Montreal" /></label>
+        <label><span data-i18n="form.datastore">Datastore</span> <input name="datastore" data-i18n-placeholder="form.datastorePh" placeholder="real DS name (not NONE) — needed for ISO" /></label>
       </div>
-      <label>VM folder (GOVC_FOLDER) <input name="folder" placeholder="/Montreal/vm/VMs/TDM/OpenShift/ACM/LAB" /></label>
-      <label>ISO folder <input name="isoFolder" placeholder="rf2vc/isos" /></label>
-      <label class="check"><input type="checkbox" name="insecure" /> Insecure TLS (GOVC_INSECURE)</label>
-      <label>Notes <input name="notes" /></label>
+      <label><span data-i18n="form.folder">VM folder (GOVC_FOLDER)</span> <input name="folder" placeholder="/Montreal/vm/VMs/TDM/OpenShift/ACM/LAB" /></label>
+      <label><span data-i18n="form.isoFolder">ISO folder</span> <input name="isoFolder" placeholder="rf2vc/isos" /></label>
+      <label class="check"><input type="checkbox" name="insecure" /> <span data-i18n="form.insecure">Insecure TLS (GOVC_INSECURE)</span></label>
+      <label><span data-i18n="form.notes">Notes</span> <input name="notes" /></label>
       <div class="actions">
-        <button type="submit" class="pill primary">Save</button>
-        <button type="button" class="pill ghost" data-action="test">Test</button>
-        <button type="button" class="pill ghost" data-action="cancel">Cancel</button>
+        <button type="submit" class="pill primary" data-i18n="btn.save">Save</button>
+        <button type="button" class="pill ghost" data-action="test" data-i18n="btn.test">Test</button>
+        <button type="button" class="pill ghost" data-action="cancel" data-i18n="btn.cancel">Cancel</button>
       </div>
       <p class="msg" data-msg="vc"></p>
     </form>
@@ -144,14 +148,15 @@
     <div class="modal-backdrop" data-close-test-modal></div>
     <div class="modal-card">
       <div class="modal-head">
-        <h2 id="testModalTitle">Connection test</h2>
-        <button type="button" class="pill ghost sm" data-close-test-modal>Close</button>
+        <h2 id="testModalTitle" data-i18n="modal.title">Connection test</h2>
+        <button type="button" class="pill ghost sm" data-close-test-modal data-i18n="btn.close">Close</button>
       </div>
       <p class="detail-meta" id="testModalSummary"></p>
       <ul class="check-list" id="testModalChecks"></ul>
     </div>
   </div>
 
+  <script src="/static/i18n.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

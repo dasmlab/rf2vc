@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.2.3] — 2026-10-03
+
+- **EN | FR-CA (Québec French)**: language toggle in the dashboard header and on the oauth sign-in page; the choice is remembered in the browser and shared between both (French browsers default to FR-CA). Covers inventory, vCenter panel, health checks, folder status, UUID rows, ISO cache, forms, confirmations, Activity and the Test checklist (gateway messages such as "connected · …" / "authenticated as …" are translated client-side). Breakglass is **Bris de glace** in French.
+- Switching language re-renders the current view in place; an open create/edit form keeps what was typed.
+
 ## [1.2.2] — 2026-10-03
 
 - **Sign-in page: breakglass behind its own button**: the oauth-proxy page now shows only **Log in with OpenShift** plus a **Breakglass** button; the local username/password form is a separate view (`#breakglass`) with an emergency-use warning and a link back. A failed breakglass attempt stays on that view.

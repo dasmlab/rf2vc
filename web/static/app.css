@@ -83,6 +83,29 @@ body {
 .hero-orb.a { width: 160px; height: 160px; left: -36px; top: -40px; background: rgba(47, 143, 125, 0.28); }
 .hero-orb.b { width: 120px; height: 120px; right: 10%; bottom: -36px; background: rgba(151, 110, 176, 0.2); }
 .hero-content { position: relative; z-index: 1; max-width: 40rem; }
+.lang-toggle {
+  position: absolute;
+  top: 0.85rem;
+  right: 0.85rem;
+  z-index: 2;
+  display: inline-flex;
+  border: 1.5px solid var(--dasm-border-strong);
+  border-radius: var(--pill);
+  background: var(--dasm-surface-1);
+  overflow: hidden;
+}
+.lang-toggle button {
+  border: 0;
+  background: transparent;
+  color: var(--dasm-text-soft);
+  font: 700 0.78rem/1 var(--font-body);
+  letter-spacing: 0.06em;
+  padding: 0.42rem 0.75rem;
+  cursor: pointer;
+}
+.lang-toggle button + button { border-left: 1px solid var(--dasm-border-soft); }
+.lang-toggle button:hover { background: var(--dasm-surface-2); }
+.lang-toggle button.active { background: var(--dasm-primary); color: #fff; }
 .brand {
   margin: 0.3rem 0 0.1rem;
   font-family: var(--font-display);

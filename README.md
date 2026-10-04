@@ -110,6 +110,13 @@ make build && make run
 # UI: http://127.0.0.1:8080/  (basic auth)
 ```
 
+**Languages:** the dashboard and the oauth sign-in page have an **EN | FR-CA** (Québec French)
+toggle. The choice is stored in the browser (`localStorage` key `rf2vc.lang`) and shared by both;
+without a saved choice, a French browser gets FR-CA. Strings live in `web/static/i18n.js`
+(`I18N.en` / `I18N["fr-CA"]`, same keys); static markup uses `data-i18n*` attributes, and fixed
+gateway messages (health / Test checklist) are mapped in `SERVER_FR`. The sign-in and error
+templates carry their own small dictionaries in `web/oauth/`.
+
 ## API (people via oauth-proxy, systems via bearer token on :8444; Basic Auth when running without either)
 
 - `GET /api/v1/status`
