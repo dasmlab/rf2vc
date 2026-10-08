@@ -22,6 +22,8 @@ type Config struct {
 	Auth           AuthConfig `yaml:"auth"`
 	DataDir        string     `yaml:"dataDir"`
 	ISOCacheDir    string     `yaml:"isoCacheDir"`
+	// VCenterConfigMaps: "auto" (default; on when running in a cluster), "on", "off".
+	VCenterConfigMaps string `yaml:"vcenterConfigMaps"`
 }
 
 type AuthConfig struct {
@@ -57,6 +59,9 @@ func Load(path string) (*Config, error) {
 	}
 	if c.ISOCacheDir == "" {
 		c.ISOCacheDir = c.DataDir + "/iso-cache"
+	}
+	if c.VCenterConfigMaps == "" {
+		c.VCenterConfigMaps = "auto"
 	}
 	if c.Auth.APIService == "" {
 		c.Auth.APIService = "rf2vc"
@@ -103,5 +108,8 @@ func applyEnvOverrides(c *Config) {
 	}
 	if v := os.Getenv("RF2VC_ISO_CACHE_DIR"); v != "" {
 		c.ISOCacheDir = v
+	}
+	if v := os.Getenv("RF2VC_VCENTER_CONFIGMAPS"); v != "" {
+		c.VCenterConfigMaps = v
 	}
 }

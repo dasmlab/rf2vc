@@ -3,6 +3,7 @@ package vsphere
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -65,7 +66,6 @@ type uuidCacheEntry struct {
 
 const uuidCacheTTL = 2 * time.Minute
 
-
 // NormalizeDatastore treats placeholders (NONE, notset, n/a, -) as unset.
 // Folder listing and UUID lookup work without a datastore; ISO staging does not.
 func NormalizeDatastore(s string) string {
@@ -78,7 +78,14 @@ func NormalizeDatastore(s string) string {
 	}
 }
 
+// ErrNoPassword stops a login attempt with an empty password (which would
+// count as a failed login against the vCenter account).
+var ErrNoPassword = errors.New("no password set: enter it with Edit, or create the credentials Secret")
+
 func NewClient(ep Endpoint) (*Client, error) {
+	if ep.Password == "" {
+		return nil, ErrNoPassword
+	}
 	if ep.ISOCache == "" {
 		ep.ISOCache = "/var/tmp/rf2vc"
 	}

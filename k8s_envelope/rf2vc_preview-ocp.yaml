@@ -72,6 +72,37 @@ subjects:
     namespace: __PREVIEW_NS__
 
 ---
+# The gateway reads vCenter ConfigMaps (label rf2vc.dasmlab.org/vcenter=true)
+# and their credentials Secrets at startup, and writes ConfigMaps for vCenters
+# defined in the UI (label rf2vc.dasmlab.org/origin=runtime).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: rf2vc-vcenter-config
+  namespace: __PREVIEW_NS__
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rf2vc-vcenter-config
+  namespace: __PREVIEW_NS__
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: rf2vc-vcenter-config
+subjects:
+  - kind: ServiceAccount
+    name: rf2vc-sa
+    namespace: __PREVIEW_NS__
+
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:

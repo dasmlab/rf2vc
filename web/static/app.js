@@ -263,9 +263,13 @@ function renderVCList() {
     const dry = vc.dryRun || globalDryRun
       ? `<span class="pill-tag dry">${escapeHtml(t("dry.tag"))}</span>`
       : "";
+    const gitops = vc.configOrigin === "gitops"
+      ? `<span class="pill-tag gitops">${escapeHtml(t("tag.gitops"))}</span>`
+      : "";
+    const nopw = vc.hasPassword ? "" : `<span class="pill-tag nopw">${escapeHtml(t("tag.noPassword"))}</span>`;
     return `
       <button type="button" class="vc-item ${active ? "active" : ""}" data-select="${vc.id}">
-        <div class="name">${escapeHtml(vc.name)} ${dry}</div>
+        <div class="name">${escapeHtml(vc.name)} ${dry}${gitops}${nopw}</div>
         <p class="meta">${escapeHtml(vc.url)}</p>
         <p class="meta">${escapeHtml(vc.datacenter)} / ${escapeHtml(dsLabel(vc.datastore))}</p>
         <span class="count">${escapeHtml(t("inv.uuidCount", { n }))}</span>
@@ -345,10 +349,46 @@ function showEditForm(vc) {
         <p class="caps" data-i18n="edit.caps">${escapeHtml(t("edit.caps"))}</p>
         <h2 class="detail-title">${escapeHtml(vc.name)}</h2>
         <p class="detail-meta" data-i18n="edit.meta">${escapeHtml(t("edit.meta"))}</p>
+        ${configMapNote(vc)}
       </div>
     </div>`;
   $("#detailBody").appendChild(form);
   wireVCForm(form);
+}
+
+function secretName(vc) {
+  return vc.credentialsSecret?.name || "";
+}
+
+function i18nSpan(key, vars) {
+  return `<span data-i18n="${escapeHtml(key)}" data-i18n-vars="${escapeHtml(JSON.stringify(vars))}">${escapeHtml(t(key, vars))}</span>`;
+}
+
+function configMapNote(vc) {
+  if (!vc.configMap) return "";
+  const vars = { cm: vc.configMap, secret: secretName(vc) || "—" };
+  const head = vc.configOrigin === "gitops" ? "cm.gitopsNote" : "cm.runtimeNote";
+  const pw = vc.passwordSource === "secret" ? "cm.pwFromSecret" : "cm.pwUntilSecret";
+  return `<p class="cm-note ${escapeHtml(vc.configOrigin || "")}">${i18nSpan(head, vars)} ${i18nSpan(pw, vars)}</p>`;
+}
+
+function sourceRowsHTML(vc) {
+  const rows = [];
+  if (vc.configMap) {
+    const tag = vc.configOrigin === "gitops" ? "tag.gitops" : "tag.runtime";
+    rows.push(`<div class="field-row"><dt>${escapeHtml(t("f.source"))}</dt><dd><code>ConfigMap/${escapeHtml(vc.configMap)}</code> <span class="pill-tag ${escapeHtml(vc.configOrigin || "")}">${escapeHtml(t(tag))}</span></dd></div>`);
+  }
+  const secret = secretName(vc);
+  let pw;
+  if (!vc.hasPassword) {
+    pw = `<span class="pw-missing">${escapeHtml(t(secret ? "pw.missingSecret" : "pw.missing", { secret }))}</span>`;
+  } else if (vc.passwordSource === "secret") {
+    pw = escapeHtml(t("pw.secret", { secret }));
+  } else {
+    pw = escapeHtml(t(secret ? "pw.manualWaiting" : "pw.manual", { secret }));
+  }
+  rows.push(`<div class="field-row"><dt>${escapeHtml(t("f.password"))}</dt><dd>${pw}</dd></div>`);
+  return rows.join("");
 }
 
 function lightHTML(tone, label) {
@@ -377,6 +417,7 @@ function showVCView(vc) {
           <div class="field-row"><dt>${escapeHtml(t("f.vmFolder"))}</dt><dd>${vc.folder ? `${escapeHtml(vc.folder)} <span class="pill-tag">${escapeHtml(t("tag.recursive"))}</span>` : `<em>${escapeHtml(t("notSet"))}</em>`}</dd></div>
           <div class="field-row"><dt>${escapeHtml(t("f.isoFolder"))}</dt><dd>${escapeHtml(vc.isoFolder || "rf2vc/isos")}</dd></div>
           ${notes && !notesDup ? `<div class="field-row"><dt>${escapeHtml(t("f.notes"))}</dt><dd>${escapeHtml(notes)}</dd></div>` : ""}
+          ${sourceRowsHTML(vc)}
         </dl>
         <div class="health-block">
           <div class="health-row" id="healthRow">
@@ -397,7 +438,9 @@ function showVCView(vc) {
         <button type="button" class="pill ghost sm" data-test-vc="${vc.id}">${escapeHtml(t("btn.test"))}</button>
         <button type="button" class="pill ghost sm" data-refresh-health="${vc.id}">${escapeHtml(t("btn.refresh"))}</button>
         <button type="button" class="pill ghost sm" data-edit="${vc.id}">${escapeHtml(t("btn.edit"))}</button>
-        <button type="button" class="pill danger sm" data-delete="${vc.id}">${escapeHtml(t("btn.delete"))}</button>
+        ${vc.configOrigin === "gitops"
+          ? `<button type="button" class="pill danger sm" disabled title="${escapeHtml(t("btn.deleteGitops", { cm: vc.configMap }))}">${escapeHtml(t("btn.delete"))}</button>`
+          : `<button type="button" class="pill danger sm" data-delete="${vc.id}">${escapeHtml(t("btn.delete"))}</button>`}
       </div>
     </div>
 
@@ -903,7 +946,12 @@ $("#detailPane").addEventListener("click", async (e) => {
   }
   if (del) {
     if (!confirm(t("confirm.delete"))) return;
-    await api(`/api/v1/vcenters/${del}`, { method: "DELETE" });
+    try {
+      await api(`/api/v1/vcenters/${del}`, { method: "DELETE" });
+    } catch (err) {
+      alert(err.message);
+      return;
+    }
     ui = null;
     await reload();
   }

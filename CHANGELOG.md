@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.3.0] — 2026-10-08
+
+- **vCenters from ConfigMaps**: at startup the gateway loads every ConfigMap labelled `rf2vc.dasmlab.org/vcenter=true` (key `vcenter.yaml`) in its namespace, so vCenters can be defined from GitOps / ACM policy. ConfigMap fields win; existing vCenters are matched by id or name, keeping their UUID bindings.
+- **Password via Secret reference** (`credentialsSecret`, for VSO later); until that Secret exists, the password can still be typed in the UI and is kept across restarts.
+- **UI-defined vCenters are written to ConfigMaps**: creating or editing a vCenter in the UI (or finding one only on the PVC at startup) writes `rf2vc-vc-<name>` labelled `rf2vc.dasmlab.org/origin=runtime`, without the password; deleting it in the UI removes the ConfigMap. GitOps-owned ConfigMaps are never written, and their vCenters cannot be deleted from the UI.
+- UI shows where each vCenter is defined (GitOps / runtime ConfigMap) and where its password comes from; vCenters without a password are tagged in the list.
+- A vCenter without a password is never logged into (health, folder scan, Redfish calls report "no password set"), so a ConfigMap waiting for its Secret cannot lock the vCenter account with failed logins.
+- New Role/RoleBinding `rf2vc-vcenter-config` for `rf2vc-sa`; example in `deploy/openshift/vcenter.example.yaml`.
+
 ## [1.2.3] — 2026-10-03
 
 - **EN | FR-CA (Québec French)**: language toggle in the dashboard header and on the oauth sign-in page; the choice is remembered in the browser and shared between both (French browsers default to FR-CA). Covers inventory, vCenter panel, health checks, folder status, UUID rows, ISO cache, forms, confirmations, Activity and the Test checklist (gateway messages such as "connected · …" / "authenticated as …" are translated client-side). Breakglass is **Bris de glace** in French.

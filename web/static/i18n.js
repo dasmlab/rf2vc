@@ -161,6 +161,21 @@ const I18N = {
     "msg.cdromEmpty": "CDROM empty / no ISO backing",
     "msg.unavailable": "unavailable",
     "confirm.delete": "Delete this vCenter and all UUID mappings under it?",
+    "f.source": "Defined in",
+    "f.password": "Password",
+    "tag.gitops": "GitOps",
+    "tag.runtime": "runtime",
+    "tag.noPassword": "no password",
+    "pw.secret": "from Secret {secret}",
+    "pw.manual": "typed in the UI",
+    "pw.manualWaiting": "typed in the UI · Secret {secret} not found yet",
+    "pw.missing": "not set — use Edit to enter it",
+    "pw.missingSecret": "not set — create Secret {secret} or use Edit to enter it",
+    "cm.gitopsNote": "Defined in ConfigMap {cm} (GitOps). Changes saved here last until the gateway restarts; change the ConfigMap in Git to keep them.",
+    "cm.runtimeNote": "Saved to ConfigMap {cm} (oc get cm {cm} -o yaml), without the password.",
+    "cm.pwFromSecret": "The password comes from Secret {secret}; one typed here is used until the next restart.",
+    "cm.pwUntilSecret": "A password typed here is kept by rf2vc until Secret {secret} exists.",
+    "btn.deleteGitops": "Defined in GitOps ConfigMap {cm}; remove it there",
     "confirm.unbind": "Unbind this UUID? The VM stays in vSphere; ACM/BMH will no longer reach it via rf2vc.",
     "confirm.powerOff": "Power off this VM? Guests will lose power immediately (ForceOff).",
     "power.On": "On",
@@ -326,6 +341,21 @@ const I18N = {
     "msg.cdromEmpty": "CD-ROM vide / aucune ISO",
     "msg.unavailable": "indisponible",
     "confirm.delete": "Supprimer ce vCenter et toutes ses associations d'UUID?",
+    "f.source": "Défini dans",
+    "f.password": "Mot de passe",
+    "tag.gitops": "GitOps",
+    "tag.runtime": "exécution",
+    "tag.noPassword": "aucun mot de passe",
+    "pw.secret": "du secret {secret}",
+    "pw.manual": "saisi dans l'interface",
+    "pw.manualWaiting": "saisi dans l'interface · secret {secret} introuvable pour l'instant",
+    "pw.missing": "non défini — utilisez Modifier pour le saisir",
+    "pw.missingSecret": "non défini — créez le secret {secret} ou utilisez Modifier pour le saisir",
+    "cm.gitopsNote": "Défini dans la ConfigMap {cm} (GitOps). Les changements enregistrés ici durent jusqu'au prochain redémarrage de la passerelle; modifiez la ConfigMap dans Git pour les conserver.",
+    "cm.runtimeNote": "Enregistré dans la ConfigMap {cm} (oc get cm {cm} -o yaml), sans le mot de passe.",
+    "cm.pwFromSecret": "Le mot de passe provient du secret {secret}; un mot de passe saisi ici est utilisé jusqu'au prochain redémarrage.",
+    "cm.pwUntilSecret": "Un mot de passe saisi ici est conservé par rf2vc tant que le secret {secret} n'existe pas.",
+    "btn.deleteGitops": "Défini dans la ConfigMap GitOps {cm}; retirez-le à cet endroit",
     "confirm.unbind": "Dissocier cet UUID? La VM reste dans vSphere; ACM/BMH ne pourra plus l'atteindre par rf2vc.",
     "confirm.powerOff": "Mettre cette VM hors tension? Le système invité perdra l'alimentation immédiatement (ForceOff).",
     "power.On": "Sous tension",
@@ -357,6 +387,7 @@ const SERVER_FR = [
   [/^missing required fields$/, "champs requis manquants"],
   [/^invalid URL$/, "URL invalide"],
   [/^skipped$/, "ignoré"],
+  [/^no password set: enter it with Edit, or create the credentials Secret$/, "aucun mot de passe : saisissez-le avec Modifier, ou créez le secret des identifiants"],
   [/^(\S+) reachable · (.+)$/, "$1 joignable · $2"],
 ];
 
@@ -398,7 +429,9 @@ function tCheckName(name) {
 
 /** Translate data-i18n* attributes under root (document or a template fragment). */
 function applyStaticI18n(root = document) {
-  root.querySelectorAll("[data-i18n]").forEach(el => { el.textContent = t(el.dataset.i18n); });
+  root.querySelectorAll("[data-i18n]").forEach(el => {
+    el.textContent = t(el.dataset.i18n, el.dataset.i18nVars ? JSON.parse(el.dataset.i18nVars) : {});
+  });
   root.querySelectorAll("[data-i18n-html]").forEach(el => { el.innerHTML = t(el.dataset.i18nHtml); });
   root.querySelectorAll("[data-i18n-title]").forEach(el => { el.title = t(el.dataset.i18nTitle); });
   root.querySelectorAll("[data-i18n-placeholder]").forEach(el => { el.placeholder = t(el.dataset.i18nPlaceholder); });

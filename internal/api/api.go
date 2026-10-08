@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -16,10 +18,36 @@ type Server struct {
 	st      *store.Store
 	pool    *vsphere.Pool
 	version string
+	sync    VCenterSync
+}
+
+// VCenterSync mirrors vCenter changes made in the UI to ConfigMaps.
+type VCenterSync interface {
+	Saved(ctx context.Context, id string) error
+	CheckDelete(id string) error
+	Deleted(ctx context.Context, vc store.VCenter) error
 }
 
 func New(st *store.Store, pool *vsphere.Pool, version string) *Server {
 	return &Server{st: st, pool: pool, version: version}
+}
+
+func (s *Server) SetSync(sync VCenterSync) { s.sync = sync }
+
+// synced writes the ConfigMap for id and returns the refreshed record. A
+// ConfigMap failure does not undo the change; it is logged to Activity.
+func (s *Server) synced(ctx context.Context, id string, fallback store.VCenter) store.VCenter {
+	if s.sync == nil {
+		return fallback
+	}
+	if err := s.sync.Saved(ctx, id); err != nil {
+		log.Printf("vcenter %s: ConfigMap: %v", id, err)
+		activity.RunErr("configmap", err.Error(), map[string]any{"vcenterId": id, "name": fallback.Name})
+	}
+	if vc, ok := s.st.GetVCenter(id); ok {
+		return vc
+	}
+	return fallback
 }
 
 func (s *Server) Mount(mux *http.ServeMux) {
@@ -119,7 +147,7 @@ func (s *Server) vcenters(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		writeJSON(w, http.StatusCreated, out)
+		writeJSON(w, http.StatusCreated, s.synced(r.Context(), out.ID, out))
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -187,13 +215,26 @@ func (s *Server) vcenterItem(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.pool.Invalidate(id)
-		writeJSON(w, http.StatusOK, out)
+		writeJSON(w, http.StatusOK, s.synced(r.Context(), id, out))
 	case http.MethodDelete:
+		if s.sync != nil {
+			if err := s.sync.CheckDelete(id); err != nil {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
+		}
+		vc, _ := s.st.GetVCenter(id)
 		if err := s.st.DeleteVCenter(id); err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
 		}
 		s.pool.Invalidate(id)
+		if s.sync != nil {
+			if err := s.sync.Deleted(r.Context(), vc); err != nil {
+				log.Printf("vcenter %s: delete ConfigMap: %v", id, err)
+				activity.RunErr("configmap", err.Error(), map[string]any{"vcenterId": id, "configMap": vc.ConfigMap})
+			}
+		}
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -315,7 +356,7 @@ func (s *Server) vcDryRun(w http.ResponseWriter, r *http.Request, id string) {
 		"name":      out.Name,
 		"dryRun":    out.DryRun,
 	})
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, s.synced(r.Context(), id, out))
 }
 
 func (s *Server) vcFolderVMs(w http.ResponseWriter, r *http.Request, id string) {

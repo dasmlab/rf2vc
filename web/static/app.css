@@ -489,7 +489,8 @@ body {
   justify-content: flex-start;
   margin-top: 0.45rem;
 }
-.uuid-actions .pill:disabled {
+.uuid-actions .pill:disabled,
+.pill.danger:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
@@ -989,3 +990,18 @@ body.dry-run-on .dry-toggle {
   color: inherit;
   font-weight: 500;
 }
+
+.pill-tag.gitops { background: #e6f4f0; color: var(--dasm-primary-dark); border-color: var(--dasm-border-strong); }
+.pill-tag.runtime { background: #fdf6e3; color: #7a5a00; border-color: #d4a017; }
+.pill-tag.nopw { background: #fdecee; color: var(--dasm-danger); border-color: rgba(204, 71, 87, 0.45); }
+.pw-missing { color: var(--dasm-danger); font-weight: 700; }
+.cm-note {
+  margin: 0.6rem 0 0;
+  padding: 0.55rem 0.8rem;
+  border: 2px solid var(--dasm-primary);
+  border-radius: 14px;
+  background: #e6f4f0;
+  color: var(--dasm-primary-dark);
+  font-weight: 600;
+}
+.cm-note.runtime { border-color: #d4a017; background: #fdf6e3; color: #7a5a00; }

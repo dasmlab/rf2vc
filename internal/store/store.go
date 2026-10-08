@@ -26,7 +26,32 @@ type VCenter struct {
 	ISOFolder  string `json:"isoFolder"`
 	Notes      string `json:"notes,omitempty"`
 	DryRun     bool   `json:"dryRun,omitempty"` // per-vCenter: fake outbound mutations
+
+	// ConfigMap that defines this vCenter (namespace of the gateway), if any.
+	ConfigMap string `json:"configMap,omitempty"`
+	// ConfigOrigin is OriginGitOps (rf2vc never writes it) or OriginRuntime
+	// (written by rf2vc for a vCenter created in the UI).
+	ConfigOrigin      string     `json:"configOrigin,omitempty"`
+	CredentialsSecret *SecretRef `json:"credentialsSecret,omitempty"`
+	// PasswordSource is PasswordFromSecret or PasswordManual (typed in the UI).
+	PasswordSource string `json:"passwordSource,omitempty"`
+	// HasPassword is output-only (the password itself is always redacted).
+	HasPassword bool `json:"hasPassword"`
 }
+
+// SecretRef points at a Secret in the gateway's namespace holding vSphere credentials.
+type SecretRef struct {
+	Name        string `json:"name" yaml:"name"`
+	PasswordKey string `json:"passwordKey,omitempty" yaml:"passwordKey,omitempty"` // default "password"
+	UsernameKey string `json:"usernameKey,omitempty" yaml:"usernameKey,omitempty"` // optional: overrides username
+}
+
+const (
+	OriginGitOps       = "gitops"
+	OriginRuntime      = "runtime"
+	PasswordFromSecret = "secret"
+	PasswordManual     = "manual"
+)
 
 // Mapping binds a BIOS UUID to a vCenter.
 type Mapping struct {
@@ -239,6 +264,7 @@ func (s *Store) GetVCenterSecret(id string) (VCenter, bool) {
 }
 
 func redact(vc VCenter) VCenter {
+	vc.HasPassword = vc.Password != ""
 	vc.Password = ""
 	vc.Datastore = normalizeDatastore(vc.Datastore)
 	return vc
@@ -262,6 +288,8 @@ func (s *Store) UpsertVCenter(vc VCenter) (VCenter, error) {
 		if vc.Password == "" {
 			return VCenter{}, fmt.Errorf("password is required for new vCenter")
 		}
+		vc.PasswordSource = PasswordManual
+		vc.ConfigMap, vc.ConfigOrigin, vc.CredentialsSecret = "", "", nil
 	} else {
 		existing, ok := s.vcenters[vc.ID]
 		if !ok {
@@ -269,16 +297,100 @@ func (s *Store) UpsertVCenter(vc VCenter) (VCenter, error) {
 		}
 		if vc.Password == "" {
 			vc.Password = existing.Password
+			vc.PasswordSource = existing.PasswordSource
+		} else {
+			vc.PasswordSource = PasswordManual
 		}
 		// Preserve dry-run unless caller set it via SetVCenterDryRun.
 		// Upsert from the edit form does not toggle DryRun.
 		vc.DryRun = existing.DryRun
+		vc.ConfigMap, vc.ConfigOrigin, vc.CredentialsSecret = existing.ConfigMap, existing.ConfigOrigin, existing.CredentialsSecret
 	}
+	vc.HasPassword = false
 	s.vcenters[vc.ID] = vc
 	if err := s.persistLocked(); err != nil {
 		return VCenter{}, err
 	}
 	return redact(vc), nil
+}
+
+// ApplyConfigVCenter merges a vCenter defined in a ConfigMap into the store.
+// It matches an existing record by ID, then by ConfigMap name, then by name
+// (so UUID mappings survive moving a vCenter into a ConfigMap). ConfigMap
+// fields win; secretPassword wins when non-empty, otherwise a password typed
+// in the UI is kept. dryRun is applied only when set.
+func (s *Store) ApplyConfigVCenter(in VCenter, dryRun *bool, secretPassword string) (VCenter, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if in.URL == "" || in.Datacenter == "" {
+		return VCenter{}, fmt.Errorf("configmap %s: url and datacenter are required", in.ConfigMap)
+	}
+	if in.Name == "" {
+		in.Name = in.URL
+	}
+	if in.ISOFolder == "" {
+		in.ISOFolder = "rf2vc/isos"
+	}
+	in.Datastore = normalizeDatastore(in.Datastore)
+
+	existing, found := s.vcenters[in.ID]
+	if !found || in.ID == "" {
+		found = false
+		for _, vc := range s.vcenters {
+			if in.ConfigMap != "" && vc.ConfigMap == in.ConfigMap {
+				existing, found = vc, true
+				break
+			}
+		}
+	}
+	if !found {
+		for _, vc := range s.vcenters {
+			if vc.Name == in.Name && (vc.ConfigMap == "" || vc.ConfigMap == in.ConfigMap) {
+				existing, found = vc, true
+				break
+			}
+		}
+	}
+	if found {
+		in.ID = existing.ID
+		in.DryRun = existing.DryRun
+	} else if in.ID == "" {
+		in.ID = newID()
+	}
+	if dryRun != nil {
+		in.DryRun = *dryRun
+	}
+	switch {
+	case secretPassword != "":
+		in.Password, in.PasswordSource = secretPassword, PasswordFromSecret
+	case found && existing.Password != "":
+		in.Password = existing.Password
+		in.PasswordSource = existing.PasswordSource
+		if in.PasswordSource == PasswordFromSecret {
+			in.PasswordSource = PasswordManual // secret gone; last known value kept
+		}
+	default:
+		in.Password, in.PasswordSource = "", ""
+	}
+	in.HasPassword = false
+	s.vcenters[in.ID] = in
+	if err := s.persistLocked(); err != nil {
+		return VCenter{}, err
+	}
+	return redact(in), nil
+}
+
+// SetVCenterConfigMap records the ConfigMap backing a vCenter.
+func (s *Store) SetVCenterConfigMap(id, configMap, origin string, ref *SecretRef) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	vc, ok := s.vcenters[id]
+	if !ok {
+		return fmt.Errorf("vcenter %s not found", id)
+	}
+	vc.ConfigMap, vc.ConfigOrigin, vc.CredentialsSecret = configMap, origin, ref
+	s.vcenters[id] = vc
+	return s.persistLocked()
 }
 
 // GetSettings returns process-wide settings.

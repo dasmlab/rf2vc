@@ -101,6 +101,29 @@ bmc:
   disableCertificateVerification: true
 ```
 
+### vCenters from ConfigMaps (GitOps)
+
+At startup the gateway reads every ConfigMap in its namespace labelled
+`rf2vc.dasmlab.org/vcenter: "true"` (key `vcenter.yaml`, one vCenter each). See
+[`deploy/openshift/vcenter.example.yaml`](deploy/openshift/vcenter.example.yaml).
+
+- **Fields** from the ConfigMap win over what is on the PVC. A vCenter already defined in the UI is
+  matched by `id`, then by name, so its UUID bindings are kept when it moves into Git.
+- **Password** comes from `credentialsSecret` (key `password`, optional `usernameKey`) when that
+  Secret exists, e.g. written by VSO. Until then, open the vCenter, **Edit**, type the password:
+  rf2vc keeps it on its PVC across restarts, and the Secret takes over once it appears (read at startup).
+- **Defined in the UI**: a vCenter created (or edited) in the UI, or found only on the PVC at startup,
+  is written to ConfigMap `rf2vc-vc-<name>` with label `rf2vc.dasmlab.org/origin: runtime` — never
+  the password, but a `credentialsSecret` placeholder of the same name. Take it to Git with
+  `oc -n rf2vc-system get cm rf2vc-vc-<name> -o yaml` and drop the `origin` label there.
+- **GitOps-owned** ConfigMaps (no `origin: runtime` label) are never written by rf2vc. Edits in the UI
+  last until the next restart, and the UI cannot delete such a vCenter (remove it from Git instead).
+- If a ConfigMap disappears, the vCenter stays and is written back as a runtime ConfigMap; delete it
+  in the UI to remove it.
+- Needs Role `rf2vc-vcenter-config` (ConfigMaps get/list/create/update/delete, Secrets get) for
+  `rf2vc-sa`. `vcenterConfigMaps` / `RF2VC_VCENTER_CONFIGMAPS`: `auto` (default: on in a cluster),
+  `on`, `off`.
+
 ## Local
 
 ```bash

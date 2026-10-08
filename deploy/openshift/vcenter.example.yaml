@@ -1,0 +1,36 @@
+# One vCenter per ConfigMap, in the gateway's namespace. rf2vc reads every
+# ConfigMap labelled rf2vc.dasmlab.org/vcenter=true at startup; fields here win
+# over edits made in the UI (those last until the next restart).
+#
+# Password: from credentialsSecret when that Secret exists (e.g. written by VSO);
+# until then, enter it in the UI (Edit) and rf2vc keeps it on its PVC.
+# Without the rf2vc.dasmlab.org/origin=runtime label, rf2vc never writes or
+# deletes this ConfigMap, and the UI cannot delete the vCenter.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rf2vc-vc-lab
+  namespace: rf2vc-system
+  labels:
+    app: rf2vc
+    rf2vc.dasmlab.org/vcenter: "true"
+data:
+  vcenter.yaml: |
+    # id: 983534f971b7af10   # optional; keeps UUID bindings when moving a vCenter from the UI into Git
+    name: lab-vc
+    url: https://vcenter.example.local/sdk
+    username: administrator@vsphere.local
+    insecure: true
+    datacenter: DC0
+    datastore: LocalDS_0
+    folder: /DC0/vm
+    isoFolder: rf2vc/isos
+    notes: managed in Git
+    # dryRun: true
+    credentialsSecret:
+      name: rf2vc-vc-lab
+      passwordKey: password      # default "password"
+      # usernameKey: username    # optional; overrides username above
+---
+# Created out of band or by VSO — never commit the real password.
+# oc -n rf2vc-system create secret generic rf2vc-vc-lab --from-literal=password='…'

@@ -15,9 +15,11 @@ import (
 	"github.com/dasmlab/rf2vc/internal/activity"
 	"github.com/dasmlab/rf2vc/internal/api"
 	"github.com/dasmlab/rf2vc/internal/config"
+	"github.com/dasmlab/rf2vc/internal/kube"
 	"github.com/dasmlab/rf2vc/internal/kubeauth"
 	"github.com/dasmlab/rf2vc/internal/redfish"
 	"github.com/dasmlab/rf2vc/internal/store"
+	"github.com/dasmlab/rf2vc/internal/vcsync"
 	"github.com/dasmlab/rf2vc/internal/vsphere"
 	"github.com/dasmlab/rf2vc/web"
 )
@@ -73,6 +75,9 @@ func main() {
 		_, _ = w.Write([]byte("ok"))
 	}
 	apiSrv := api.New(st, pool, buildVersion)
+	if vcs := startVCenterSync(cfg.VCenterConfigMaps, st); vcs != nil {
+		apiSrv.SetSync(vcs)
+	}
 	mountAPI := func(mux *http.ServeMux, mode string) {
 		apiSrv.Mount(mux)
 		mux.HandleFunc("/api/v1/whoami", whoami(mode))
@@ -207,4 +212,31 @@ func isPublicRedfishRoot(path string) bool {
 	default:
 		return false
 	}
+}
+
+// startVCenterSync loads vCenters from ConfigMaps; nil when the feature is off
+// or the gateway is not running in a cluster (mode "auto").
+func startVCenterSync(mode string, st *store.Store) *vcsync.Sync {
+	if mode == "off" {
+		log.Printf("vCenter ConfigMaps: off")
+		return nil
+	}
+	kc, err := kube.InCluster()
+	if err != nil {
+		if mode == "on" {
+			log.Fatalf("vCenter ConfigMaps: %v", err)
+		}
+		log.Printf("vCenter ConfigMaps: off (%v)", err)
+		return nil
+	}
+	vcs := vcsync.New(kc, st)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := vcs.Startup(ctx); err != nil {
+		log.Printf("vCenter ConfigMaps: %v (continuing with %s)", err, "state.json")
+		activity.RunErr("configmap", err.Error(), map[string]any{"namespace": vcs.Namespace()})
+	} else {
+		log.Printf("vCenter ConfigMaps: on (namespace %s, label %s=true)", vcs.Namespace(), vcsync.LabelVCenter)
+	}
+	return vcs
 }
