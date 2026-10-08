@@ -5,7 +5,8 @@
 //     referenced Secret when it exists, otherwise a password typed in the UI is kept).
 //   - vCenters created in the UI, and store-only vCenters found at startup, are
 //     written to a ConfigMap labelled rf2vc.dasmlab.org/origin=runtime (no password).
-//   - ConfigMaps without that label belong to GitOps; rf2vc never writes or deletes them.
+//   - Any other value (set rf2vc.dasmlab.org/origin=gitops in Git) belongs to GitOps;
+//     rf2vc never writes or deletes those ConfigMaps.
 package vcsync
 
 import (
@@ -305,7 +306,7 @@ func Render(vc store.VCenter, name string, ref *store.SecretRef) kube.ConfigMap 
 				"rf2vc.dasmlab.org/note": fmt.Sprintf(
 					"Written by rf2vc for a vCenter defined in the UI. The password is not stored here: "+
 						"put it in Secret %s (key %s), e.g. via VSO. To manage this vCenter from Git, "+
-						"commit this ConfigMap without the %s label.", ref.Name, key, LabelOrigin),
+						"commit this ConfigMap with label %s: gitops.", ref.Name, key, LabelOrigin),
 			},
 		},
 		Data: map[string]string{DataKey: string(b)},

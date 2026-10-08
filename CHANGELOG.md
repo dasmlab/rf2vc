@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.3.1] — 2026-10-08
+
+- Docs / ConfigMap note: to take a runtime vCenter ConfigMap into Git, set `rf2vc.dasmlab.org/origin: gitops` (removing the label is not enough — Argo/ACM apply keeps labels it did not set). Example and README updated; restart after ConfigMap/Secret changes (read at startup).
+
 ## [1.3.0] — 2026-10-08
 
 - **vCenters from ConfigMaps**: at startup the gateway loads every ConfigMap labelled `rf2vc.dasmlab.org/vcenter=true` (key `vcenter.yaml`) in its namespace, so vCenters can be defined from GitOps / ACM policy. ConfigMap fields win; existing vCenters are matched by id or name, keeping their UUID bindings.

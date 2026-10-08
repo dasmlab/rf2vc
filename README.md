@@ -115,11 +115,14 @@ At startup the gateway reads every ConfigMap in its namespace labelled
 - **Defined in the UI**: a vCenter created (or edited) in the UI, or found only on the PVC at startup,
   is written to ConfigMap `rf2vc-vc-<name>` with label `rf2vc.dasmlab.org/origin: runtime` — never
   the password, but a `credentialsSecret` placeholder of the same name. Take it to Git with
-  `oc -n rf2vc-system get cm rf2vc-vc-<name> -o yaml` and drop the `origin` label there.
-- **GitOps-owned** ConfigMaps (no `origin: runtime` label) are never written by rf2vc. Edits in the UI
+  `oc -n rf2vc-system get cm rf2vc-vc-<name> -o yaml`, set label `rf2vc.dasmlab.org/origin: gitops`
+  and keep the `id`. (Removing the label is not enough: Argo/ACM apply does not delete a label it did not set.)
+- **GitOps-owned** ConfigMaps (`origin: gitops`, or no `origin` label) are never written by rf2vc. Edits in the UI
   last until the next restart, and the UI cannot delete such a vCenter (remove it from Git instead).
 - If a ConfigMap disappears, the vCenter stays and is written back as a runtime ConfigMap; delete it
   in the UI to remove it.
+- ConfigMaps and Secrets are read **at startup**: after changing them, restart the Deployment
+  (VSO `rolloutRestartTargets`, or a pod-template annotation bump from Git).
 - Needs Role `rf2vc-vcenter-config` (ConfigMaps get/list/create/update/delete, Secrets get) for
   `rf2vc-sa`. `vcenterConfigMaps` / `RF2VC_VCENTER_CONFIGMAPS`: `auto` (default: on in a cluster),
   `on`, `off`.

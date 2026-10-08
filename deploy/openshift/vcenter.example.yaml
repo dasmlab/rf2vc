@@ -4,8 +4,8 @@
 #
 # Password: from credentialsSecret when that Secret exists (e.g. written by VSO);
 # until then, enter it in the UI (Edit) and rf2vc keeps it on its PVC.
-# Without the rf2vc.dasmlab.org/origin=runtime label, rf2vc never writes or
-# deletes this ConfigMap, and the UI cannot delete the vCenter.
+# origin: gitops — rf2vc never writes or deletes this ConfigMap, and the UI
+# cannot delete the vCenter. Read at startup: restart rf2vc after changing it.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -14,6 +14,7 @@ metadata:
   labels:
     app: rf2vc
     rf2vc.dasmlab.org/vcenter: "true"
+    rf2vc.dasmlab.org/origin: gitops
 data:
   vcenter.yaml: |
     # id: 983534f971b7af10   # optional; keeps UUID bindings when moving a vCenter from the UI into Git
