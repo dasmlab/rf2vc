@@ -688,17 +688,104 @@ func (c *Client) InsertMedia(ctx context.Context, uuid, imageURL string) error {
 		return fmt.Errorf("upload iso: %w", err)
 	}
 
+	want := ""
+	if c.ds != nil {
+		want = c.ds.Path(dsPath)
+	}
+	devices, err := vm.Device(ctx)
+	if err != nil {
+		return err
+	}
+	prev, connected := cdromState(devices)
+	if connected && isoPathsEqual(prev, want) {
+		log.Printf("InsertMedia: %s already connected to %s — no-op", info.Name, prev)
+		c.mu.Lock()
+		c.mediaISO[strings.ToLower(uuid)] = imageURL
+		c.mu.Unlock()
+		return nil
+	}
+
+	wasOn := false
+	if st, stErr := vm.PowerState(ctx); stErr == nil {
+		wasOn = st == types.VirtualMachinePowerStatePoweredOn
+	}
+	log.Printf("InsertMedia: %s replacing cd %q with %s", info.Name, prev, want)
+
+	// A connected CD keeps its old backing across a single Reconfigure, and a
+	// running guest keeps whatever it already booted. Power off first (same
+	// soft-then-hard path as a locked eject), disconnect, then attach.
+	if wasOn {
+		if err := c.powerOffForMedia(ctx, vm, info.Name); err != nil {
+			return err
+		}
+	}
+	if err := c.disconnectCDROM(ctx, vm); err != nil {
+		if !isCDROMConnectionLocked(err) {
+			return fmt.Errorf("disconnect cdrom: %w", err)
+		}
+		log.Printf("InsertMedia: CD still locked on %s after disconnect (%v); power off and retry", info.Name, err)
+		if err := c.powerOffForMedia(ctx, vm, info.Name); err != nil {
+			return err
+		}
+		wasOn = true
+		if err := c.disconnectCDROM(ctx, vm); err != nil {
+			return fmt.Errorf("disconnect cdrom after power-off: %w", err)
+		}
+	}
+	// attachCDROM re-reads devices, then sets the new backing and connects it.
 	if err := c.attachCDROM(ctx, vm, dsPath); err != nil {
 		return fmt.Errorf("attach cdrom: %w", err)
 	}
 	if err := c.SetBootCDOnce(ctx, uuid); err != nil {
 		return fmt.Errorf("set boot cd: %w", err)
 	}
+	if wasOn {
+		if err := c.powerOn(ctx, vm); err != nil {
+			return fmt.Errorf("power on after insert: %w", err)
+		}
+	}
 
 	c.mu.Lock()
 	c.mediaISO[strings.ToLower(uuid)] = imageURL
 	c.mu.Unlock()
 	return nil
+}
+
+// powerOffForMedia soft-shuts the guest, then hard-powers off. A live ISO
+// usually has no VMware Tools, so ShutdownGuest fails fast and PowerOff runs.
+func (c *Client) powerOffForMedia(ctx context.Context, vm *object.VirtualMachine, name string) error {
+	if softErr := c.softPowerOff(ctx, vm, 45*time.Second); softErr != nil {
+		log.Printf("InsertMedia: soft-off failed vm=%s (%v); hard PowerOff", name, softErr)
+		if offErr := c.powerOff(ctx, vm); offErr != nil {
+			return fmt.Errorf("power-off for CD swap: %w (soft: %v)", offErr, softErr)
+		}
+	}
+	return nil
+}
+
+func cdromState(devices object.VirtualDeviceList) (file string, connected bool) {
+	cdroms := devices.SelectByType((*types.VirtualCdrom)(nil))
+	if len(cdroms) == 0 {
+		return "", false
+	}
+	cd := cdroms[0].(*types.VirtualCdrom)
+	if cd.Connectable != nil {
+		connected = cd.Connectable.Connected
+	}
+	if iso, ok := cd.Backing.(*types.VirtualCdromIsoBackingInfo); ok {
+		file = iso.FileName
+	}
+	return file, connected
+}
+
+func isoPathsEqual(a, b string) bool {
+	na, nb := normISOPath(a), normISOPath(b)
+	return na != "" && na == nb
+}
+
+func normISOPath(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	return strings.Join(strings.Fields(s), "")
 }
 
 func (c *Client) EjectMedia(ctx context.Context, uuid string) error {
@@ -763,6 +850,9 @@ func isCDROMConnectionLocked(err error) bool {
 }
 
 func (c *Client) downloadISO(ctx context.Context, imageURL string) (string, error) {
+	// Cache key is a hash of the full URL (ISOFileName). Two different image
+	// URLs never share a local file. The datastore object is a separate
+	// content hash (contentISOName), so identical bytes still upload once.
 	name := ISOFileName(imageURL)
 	dest := filepath.Join(c.ep.ISOCache, name)
 	if st, err := os.Stat(dest); err == nil && st.Size() > 0 {
@@ -863,6 +953,46 @@ func (c *Client) attachCDROM(ctx context.Context, vm *object.VirtualMachine, dsI
 		})
 	}
 
+	task, err := vm.Reconfigure(ctx, spec)
+	if err != nil {
+		return err
+	}
+	return c.waitTask(ctx, vm, task)
+}
+
+// disconnectCDROM drops the tray without changing the ISO backing. vSphere
+// ignores a backing edit while Connected is still true, so this is its own
+// Reconfigure. The caller re-reads devices and then attaches.
+func (c *Client) disconnectCDROM(ctx context.Context, vm *object.VirtualMachine) error {
+	_ = c.ensureMsgAutoAnswer(ctx, vm)
+	_ = c.answerPendingQuestions(ctx, vm)
+
+	devices, err := vm.Device(ctx)
+	if err != nil {
+		return err
+	}
+	cdroms := devices.SelectByType((*types.VirtualCdrom)(nil))
+	if len(cdroms) == 0 {
+		return nil
+	}
+	cd := cdroms[0].(*types.VirtualCdrom)
+	if cd.Connectable == nil {
+		cd.Connectable = &types.VirtualDeviceConnectInfo{}
+	}
+	if !cd.Connectable.Connected && !cd.Connectable.StartConnected {
+		return nil
+	}
+	cd.Connectable.Connected = false
+	cd.Connectable.StartConnected = false
+	cd.Connectable.AllowGuestControl = true
+	spec := types.VirtualMachineConfigSpec{
+		DeviceChange: []types.BaseVirtualDeviceConfigSpec{
+			&types.VirtualDeviceConfigSpec{
+				Operation: types.VirtualDeviceConfigSpecOperationEdit,
+				Device:    cd,
+			},
+		},
+	}
 	task, err := vm.Reconfigure(ctx, spec)
 	if err != nil {
 		return err
